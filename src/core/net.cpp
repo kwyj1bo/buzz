@@ -6,6 +6,7 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <poll.h>
+#include <sys/resource.h>
 #include <unistd.h>
 
 #include <cerrno>
@@ -160,5 +161,12 @@ void set_no_delay(int fd) {
 
 // A write to a closed TLS socket must return EPIPE, not kill the process.
 void ignore_sigpipe() { std::signal(SIGPIPE, SIG_IGN); }
+
+void raise_fd_limit() {
+  rlimit limit{};
+  if (::getrlimit(RLIMIT_NOFILE, &limit) != 0) return;
+  limit.rlim_cur = limit.rlim_max;
+  ::setrlimit(RLIMIT_NOFILE, &limit);
+}
 
 }  // namespace buzz::net

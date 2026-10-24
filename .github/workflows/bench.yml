@@ -1,0 +1,51 @@
+name: Benchmark
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "src/**"
+      - "include/**"
+      - "scripts/bench.sh"
+      - ".github/workflows/bench.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bench-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bench:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build libssl-dev libsqlite3-dev
+
+      - name: Build (Release)
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUZZ_BUILD_TESTS=OFF
+          cmake --build build
+
+      - name: Run benchmarks
+        run: scripts/bench.sh build/src bench-results.md
+
+      - name: Publish report
+        if: always()
+        run: |
+          if [ -f bench-results.md ]; then cat bench-results.md >> "$GITHUB_STEP_SUMMARY"; fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bench-results
+          path: bench-results.md
+          if-no-files-found: ignore
