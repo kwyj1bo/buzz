@@ -23,6 +23,8 @@ constexpr const char* kUsage = R"(usage: buzz-server [options]
   --udp-port N           UDP port for peer discovery, default same as --port
   --cert FILE            certificate PEM, default certs/server.crt
   --key FILE             private key PEM, default certs/server.key
+  --db FILE              SQLite database for accounts and history, default buzz.db
+                         (pass "" to keep everything in memory)
   --gen-cert             create a self-signed certificate if the files are missing
   --cert-host NAME       extra DNS name or IP for the generated certificate
   --threads N            password hashing workers, default 4
@@ -52,6 +54,7 @@ uint64_t number(const std::string& flag, const std::string& value, uint64_t max)
 Options parse(int argc, char** argv) {
   Options o;
   auto& c = o.config;
+  c.db_path = "buzz.db";
   using Setter = std::function<void(const std::string&)>;
   const std::map<std::string, Setter> with_value = {
       {"--port", [&](auto& v) { c.port = static_cast<uint16_t>(number("--port", v, 65535)); }},
@@ -62,6 +65,7 @@ Options parse(int argc, char** argv) {
        }},
       {"--cert", [&](auto& v) { c.cert_file = v; }},
       {"--key", [&](auto& v) { c.key_file = v; }},
+      {"--db", [&](auto& v) { c.db_path = v; }},
       {"--cert-host", [&](auto& v) { o.cert_host = v; }},
       {"--threads", [&](auto& v) { c.worker_threads = number("--threads", v, 256); }},
       {"--pbkdf2-iterations",

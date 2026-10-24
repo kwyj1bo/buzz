@@ -2,7 +2,7 @@
 
 FROM ubuntu:24.04 AS build
 RUN apt-get update \
- && apt-get install -y --no-install-recommends build-essential cmake ninja-build libssl-dev \
+ && apt-get install -y --no-install-recommends build-essential cmake ninja-build libssl-dev libsqlite3-dev \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY CMakeLists.txt ./
@@ -14,15 +14,15 @@ RUN cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUZZ_BUILD_TESTS=O
 
 FROM ubuntu:24.04
 RUN apt-get update \
- && apt-get install -y --no-install-recommends libssl3t64 \
+ && apt-get install -y --no-install-recommends libssl3t64 libsqlite3-0 \
  && rm -rf /var/lib/apt/lists/* \
  && useradd --system --create-home --home-dir /var/lib/buzz buzz \
- && mkdir -p /var/lib/buzz/certs \
+ && mkdir -p /var/lib/buzz/certs /var/lib/buzz/data \
  && chown -R buzz:buzz /var/lib/buzz
 COPY --from=build /opt/buzz/bin/ /usr/local/bin/
 USER buzz
 WORKDIR /var/lib/buzz
-VOLUME ["/var/lib/buzz/certs"]
+VOLUME ["/var/lib/buzz/certs", "/var/lib/buzz/data"]
 EXPOSE 7000/tcp 7000/udp
 ENTRYPOINT ["buzz-server"]
-CMD ["--port", "7000", "--gen-cert"]
+CMD ["--port", "7000", "--gen-cert", "--db", "data/buzz.db"]

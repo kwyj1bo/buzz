@@ -10,7 +10,7 @@ WORK=$(mktemp -d)
 trap 'kill $(jobs -p) 2>/dev/null || true; rm -rf "$WORK"' EXIT
 
 "$BIN/buzz-server" --port "$PORT" --cert "$WORK/server.crt" --key "$WORK/server.key" \
-  --gen-cert --pbkdf2-iterations 1000 --log-level warn &
+  --db "$WORK/buzz.db" --gen-cert --pbkdf2-iterations 1000 --log-level warn &
 for _ in $(seq 1 50); do
   [ -s "$WORK/server.crt" ] && break
   sleep 0.1

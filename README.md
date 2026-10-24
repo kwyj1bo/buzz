@@ -8,7 +8,8 @@ Buzz is a hybrid messenger written in C++17. The server handles accounts, sessio
 
 - **Accounts and login.** Passwords are stored as salted PBKDF2-HMAC-SHA256 hashes (600,000 iterations). Hashing runs on a worker thread pool, so it never blocks the event loop.
 - **Session management.** Login returns a session token. If the connection drops, the client reconnects with backoff and resumes the session with the token. A second login of the same user takes over the session and closes the old connection.
-- **Chatrooms with data sync.** Each room numbers its messages and keeps a bounded history. On reconnect the client rejoins each room with the last sequence number it saw, and the server replays only the missed messages.
+- **Chatrooms with data sync.** Each room numbers its messages. On reconnect the client rejoins each room with the last sequence number it saw, and the server replays only the missed messages.
+- **SQLite persistence.** Accounts and room history are stored in SQLite (WAL mode) and survive restarts. The server keeps the newest 256 messages per room in memory and reads older gaps from disk. Messages posted during one event loop pass are written in a single transaction (group commit).
 - **Peer-to-peer direct messages.** The server sends each peer the other's UDP endpoint and a fresh AES-256-GCM key. Messages then go directly between the peers, with acknowledgements, retransmission and duplicate filtering. Direct messages continue to work when the server is down.
 - **Scalable server.** One thread runs a level-triggered `epoll` loop over non-blocking TLS sockets, a UDP socket, an `eventfd` and a `timerfd`. Room broadcasts encode a frame once and share it with all members.
 - **TLS everywhere on TCP.** OpenSSL 3, TLS 1.2 or later. The client verifies the server certificate and host name.
@@ -25,6 +26,7 @@ flowchart LR
     C -- hash jobs --> P[ThreadPool]
     P -- eventfd --> C
     U[UDP socket] --> S
+    R -- group commit --> D[(SQLite WAL)]
   end
   A[Client A] <-- TLS over TCP --> L
   B[Client B] <-- TLS over TCP --> L
@@ -50,10 +52,10 @@ Every message is `u8 type | u16 field_count | (u32 length | bytes) * field_count
 
 ## Build
 
-Buzz builds on Linux (it uses `epoll`). You need CMake 3.16+, a C++17 compiler and OpenSSL 3. On other systems, use Docker.
+Buzz builds on Linux (it uses `epoll`). You need CMake 3.16+, a C++17 compiler, OpenSSL 3 and SQLite 3. On other systems, use Docker.
 
 ```bash
-sudo apt-get install -y build-essential cmake ninja-build libssl-dev
+sudo apt-get install -y build-essential cmake ninja-build libssl-dev libsqlite3-dev
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --output-on-failure
@@ -100,6 +102,7 @@ Run the second command in two terminals to chat. The image is also published to 
 | --- | --- | --- |
 | `--port` | 7000 | TLS port |
 | `--udp-port` | same as `--port` | UDP port for peer discovery |
+| `--db` | `buzz.db` | SQLite file; `""` keeps everything in memory |
 | `--cert`, `--key` | `certs/server.crt`, `certs/server.key` | PEM files |
 | `--gen-cert` | off | create a self-signed certificate if missing |
 | `--cert-host` | none | extra DNS name or IP in the generated certificate |
@@ -112,7 +115,7 @@ Run the second command in two terminals to chat. The image is also published to 
 
 ```text
 include/buzz/   public headers of the core library
-src/core/       protocol, crypto, TLS, sessions, rooms, reliable UDP
+src/core/       protocol, crypto, TLS, sessions, rooms, storage, reliable UDP
 src/server/     epoll event loop and protocol handlers
 src/client/     interactive client, server link and peer manager
 tests/          GoogleTest unit and end-to-end suites
@@ -120,6 +123,5 @@ tests/          GoogleTest unit and end-to-end suites
 
 ## Limits
 
-- Accounts and room history are kept in memory. A server restart clears them.
 - Peer-to-peer messages need UDP reachability between the peers. The server does not relay them.
 - The UDP hello and its ack are not encrypted. The hello is authenticated with an HMAC and a timestamp, so it cannot be forged or replayed.

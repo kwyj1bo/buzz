@@ -37,6 +37,11 @@ class RoomManager {
   std::vector<StoredMessage> history_since(const std::string& room, uint64_t since,
                                            size_t limit) const;
 
+  // Recreates a room from storage after a restart. Members start empty.
+  void restore(const std::string& room, uint64_t last_seq, std::vector<StoredMessage> recent);
+  // Seq of the oldest message still in memory, or 0 when there is none.
+  uint64_t oldest_seq(const std::string& room) const;
+
   bool is_member(const std::string& room, const std::string& user) const;
   std::vector<std::string> members(const std::string& room) const;
   std::vector<std::string> rooms() const;

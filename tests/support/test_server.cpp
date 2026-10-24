@@ -10,7 +10,7 @@
 
 namespace buzz::test {
 
-TestServer::TestServer() {
+TestServer::TestServer(const std::string& db_path) {
   std::string pattern = ::testing::TempDir() + "buzz-XXXXXX";
   dir_ = ::mkdtemp(pattern.data());
   cert_file_ = dir_ + "/server.crt";
@@ -23,6 +23,7 @@ TestServer::TestServer() {
   config.udp_port = 0;
   config.cert_file = cert_file_;
   config.key_file = key_file;
+  config.db_path = db_path;
   config.pbkdf2_iterations = 1000;
   config.worker_threads = 2;
   server_ = std::make_unique<Server>(config);

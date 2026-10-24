@@ -7,12 +7,13 @@ add_library(buzz_core
   core/reliable_channel.cpp
   core/room_manager.cpp
   core/session_manager.cpp
+  core/storage.cpp
   core/tls.cpp
   core/user_store.cpp
   core/validate.cpp
 )
 target_include_directories(buzz_core PUBLIC ${PROJECT_SOURCE_DIR}/include)
-target_link_libraries(buzz_core PUBLIC OpenSSL::SSL OpenSSL::Crypto Threads::Threads)
+target_link_libraries(buzz_core PUBLIC OpenSSL::SSL OpenSSL::Crypto SQLite::SQLite3 Threads::Threads)
 
 add_library(buzz_server_lib
   server/server.cpp
