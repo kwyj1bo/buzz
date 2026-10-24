@@ -33,4 +33,12 @@ add_executable(buzz
 )
 target_link_libraries(buzz PRIVATE buzz_core)
 
-install(TARGETS buzz-server buzz RUNTIME DESTINATION bin)
+add_executable(buzz-bench
+  bench/bench_client.cpp
+  bench/chat.cpp
+  bench/main.cpp
+  bench/scenarios.cpp
+)
+target_link_libraries(buzz-bench PRIVATE buzz_core)
+
+install(TARGETS buzz-server buzz buzz-bench RUNTIME DESTINATION bin)

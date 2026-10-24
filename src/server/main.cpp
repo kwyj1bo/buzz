@@ -31,6 +31,7 @@ constexpr const char* kUsage = R"(usage: buzz-server [options]
   --pbkdf2-iterations N  default 600000
   --message-rate N       chat messages per second per connection, default 30
   --message-burst N      burst allowance for --message-rate, default 60
+  --max-connections N    default 10000
   --session-ttl SEC      how long a dropped session can resume, default 300
   --log-level LEVEL      debug, info, warn or error
 )";
@@ -76,6 +77,8 @@ Options parse(int argc, char** argv) {
        [&](auto& v) { c.message_rate = static_cast<double>(number("--message-rate", v, 1'000'000'000)); }},
       {"--message-burst",
        [&](auto& v) { c.message_burst = static_cast<double>(number("--message-burst", v, 1'000'000'000)); }},
+      {"--max-connections",
+       [&](auto& v) { c.max_connections = number("--max-connections", v, 1'000'000); }},
       {"--session-ttl",
        [&](auto& v) { c.session_ttl = std::chrono::seconds(number("--session-ttl", v, 86'400)); }},
       {"--log-level",
@@ -120,6 +123,7 @@ void ensure_certificate(const Options& o) {
 
 int main(int argc, char** argv) {
   Options options = parse(argc, argv);
+  buzz::net::raise_fd_limit();
   try {
     if (options.gen_cert) ensure_certificate(options);
     buzz::Server server(options.config);
