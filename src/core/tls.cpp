@@ -16,7 +16,10 @@ namespace {
 
 using KeyPtr = std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)>;
 using CertPtr = std::unique_ptr<X509, decltype(&X509_free)>;
-using FilePtr = std::unique_ptr<FILE, decltype(&std::fclose)>;
+struct FileCloser {
+  void operator()(FILE* file) const { std::fclose(file); }
+};
+using FilePtr = std::unique_ptr<FILE, FileCloser>;
 
 [[noreturn]] void fail(const std::string& what) {
   throw std::runtime_error(what + ": " + last_error());
@@ -83,7 +86,7 @@ CertPtr build_certificate(EVP_PKEY* key, const std::string& extra_host, int days
 FilePtr open_for_write(const std::string& path, mode_t mode) {
   int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, mode);
   if (fd < 0) throw std::runtime_error("cannot write " + path);
-  return FilePtr(::fdopen(fd, "w"), std::fclose);
+  return FilePtr(::fdopen(fd, "w"));
 }
 
 }  // namespace
