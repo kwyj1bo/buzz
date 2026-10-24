@@ -124,6 +124,7 @@ const char* to_string(MsgType type) {
     case MsgType::Who: return "who";
     case MsgType::PeerRequest: return "peer";
     case MsgType::Ping: return "ping";
+    case MsgType::Relay: return "relay";
     case MsgType::Ok: return "ok";
     case MsgType::Error: return "error";
     case MsgType::Welcome: return "welcome";
@@ -134,6 +135,7 @@ const char* to_string(MsgType type) {
     case MsgType::PeerInfo: return "peer_info";
     case MsgType::Pong: return "pong";
     case MsgType::SyncDone: return "sync_done";
+    case MsgType::Relayed: return "relayed";
     case MsgType::UdpHello: return "udp_hello";
     case MsgType::UdpAck: return "udp_ack";
     case MsgType::DmData: return "dm_data";

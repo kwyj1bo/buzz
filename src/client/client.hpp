@@ -52,6 +52,8 @@ class Client {
   void on_ok(const Message& m);
   void on_room_message(const Message& m);
   void on_peer_info(const Message& m);
+  void on_peer_error(const std::string& peer, const std::string& reason);
+  void relay(const std::string& peer, const std::string& text);
   void print(const std::string& line);
 
   // Commands (commands.cpp).

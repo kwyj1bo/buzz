@@ -35,6 +35,11 @@ struct ServerConfig {
   size_t max_rooms = 1024;
   size_t max_connections = 10'000;
   size_t max_output_buffer = 1 << 20;
+  std::chrono::seconds handshake_timeout{10};  // To finish the TLS handshake.
+  std::chrono::seconds login_timeout{300};     // To log in after connecting.
+  double message_rate = 30;    // Messages per second per connection...
+  double message_burst = 60;   // ...with bursts up to this many.
+  int max_failed_logins = 5;   // Per connection, then it is closed.
 };
 
 // TLS chat server. One thread runs a level-triggered epoll loop that owns all
@@ -99,6 +104,9 @@ class Server {
   void on_who(Connection& c, const Message& m);
   void on_list_rooms(Connection& c);
   void on_peer_request(Connection& c, const Message& m);
+  void on_relay(Connection& c, const Message& m);
+  bool within_rate(Connection& c, MsgType type);
+  void close_stale_handshakes();
   void process_auth_results();
   void start_session(Connection& c, const std::string& user);
   void take_over_session(const Session& old, uint64_t new_conn_id, const char* reason);

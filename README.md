@@ -11,6 +11,8 @@ Buzz is a hybrid messenger written in C++17. The server handles accounts, sessio
 - **Chatrooms with data sync.** Each room numbers its messages. On reconnect the client rejoins each room with the last sequence number it saw, and the server replays only the missed messages.
 - **SQLite persistence.** Accounts and room history are stored in SQLite (WAL mode) and survive restarts. The server keeps the newest 256 messages per room in memory and reads older gaps from disk. Messages posted during one event loop pass are written in a single transaction (group commit).
 - **Peer-to-peer direct messages.** The server sends each peer the other's UDP endpoint and a fresh AES-256-GCM key. Messages then go directly between the peers, with acknowledgements, retransmission and duplicate filtering. Direct messages continue to work when the server is down.
+- **Relay fallback.** If a direct UDP path does not work (for example behind a symmetric NAT), the client retries for about 1.75 s and then sends the message through the server over TLS.
+- **Hardening.** Per-connection token-bucket rate limits, a TLS handshake timeout, a login timeout, a limit on failed logins per connection, a 64 KiB frame limit and a cap on per-connection output buffers. Room text with control characters is rejected, so clients cannot inject terminal escape sequences.
 - **Scalable server.** One thread runs a level-triggered `epoll` loop over non-blocking TLS sockets, a UDP socket, an `eventfd` and a `timerfd`. Room broadcasts encode a frame once and share it with all members.
 - **TLS everywhere on TCP.** OpenSSL 3, TLS 1.2 or later. The client verifies the server certificate and host name.
 - **Tests.** GoogleTest unit and end-to-end suites run under AddressSanitizer and UndefinedBehaviorSanitizer in GitHub Actions, with GCC and Clang. The pipeline then builds and smoke-tests the Docker image.
@@ -38,7 +40,7 @@ flowchart LR
 1. A client logs in over TLS and gets a session token.
 2. The client sends a UDP hello to the server, signed with an HMAC of its token. The server records the public address it sees, which works through most NATs.
 3. `/dm bob hi` asks the server to introduce the two peers. Both receive the other's endpoint and a shared key over TLS.
-4. The peers exchange encrypted, acknowledged datagrams directly.
+4. The peers exchange encrypted, acknowledged datagrams directly. If no acknowledgement arrives, the client relays the message through the server.
 
 ### Wire protocol
 
@@ -49,6 +51,7 @@ Every message is `u8 type | u16 field_count | (u32 length | bytes) * field_count
 | `Register`, `Login`, `Resume`, `Logout` | `Ok`, `Error`, `Welcome` | `UdpHello`, `UdpAck` |
 | `Join(room, since?)`, `Leave`, `Say` | `RoomMsg`, `RoomEvent`, `SyncDone` | `DmData`, `DmAck`, `DmPunch` |
 | `ListRooms`, `Who`, `PeerRequest`, `Ping` | `Rooms`, `Members`, `PeerInfo`, `Pong` | |
+| `Relay(to, text)` | `Relayed(from, text)` | |
 
 ## Build
 
@@ -108,6 +111,8 @@ Run the second command in two terminals to chat. The image is also published to 
 | `--cert-host` | none | extra DNS name or IP in the generated certificate |
 | `--threads` | 4 | password hashing workers |
 | `--pbkdf2-iterations` | 600000 | password hashing cost |
+| `--message-rate` | 30 | chat messages per second per connection |
+| `--message-burst` | 60 | burst allowance for `--message-rate` |
 | `--session-ttl` | 300 | seconds a dropped session can be resumed |
 | `--log-level` | info | `debug`, `info`, `warn` or `error` |
 
@@ -123,5 +128,5 @@ tests/          GoogleTest unit and end-to-end suites
 
 ## Limits
 
-- Peer-to-peer messages need UDP reachability between the peers. The server does not relay them.
+- Relayed direct messages are protected by TLS on each leg, but the server can read them. Only the peer-to-peer path is end-to-end encrypted.
 - The UDP hello and its ack are not encrypted. The hello is authenticated with an HMAC and a timestamp, so it cannot be forged or replayed.

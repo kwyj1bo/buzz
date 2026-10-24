@@ -10,6 +10,7 @@ FetchContent_MakeAvailable(googletest)
 
 add_executable(buzz_tests
   crypto_test.cpp
+  hardening_test.cpp
   p2p_test.cpp
   peer_test.cpp
   protocol_test.cpp
