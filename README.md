@@ -53,6 +53,32 @@ Every message is `u8 type | u16 field_count | (u32 length | bytes) * field_count
 | `ListRooms`, `Who`, `PeerRequest`, `Ping` | `Rooms`, `Members`, `PeerInfo`, `Pong` | |
 | `Relay(to, text)` | `Relayed(from, text)` | |
 
+## Performance
+
+Measured with `buzz-bench` on a GitHub Actions runner: 2 vCPU (1 physical core with 2 threads), 7 GiB RAM. The server and the load generator share that machine and talk over loopback with TLS 1.3, so these are lower bounds. The full report is in [docs/benchmarks.md](docs/benchmarks.md).
+
+| Scenario | Result |
+| --- | --- |
+| Concurrent logged-in TLS connections | 10,000 at about 24.5 KiB each (303 MiB RSS) |
+| Ping round trip with 10,000 connections open | p50 71 µs, p99 88 µs |
+| Chat fan-out, 1,000 clients in 50 rooms of 20 | 40,000 deliveries/s at p50 0.76 ms, p99 5.3 ms, 57% of one core |
+| Chat fan-out at half that load | 20,000 deliveries/s at p50 0.44 ms, p99 3.1 ms |
+| Peak chat throughput (closed loop) | about 47,000 deliveries/s |
+| TLS handshakes | about 1,100 per second |
+| Replay of 1,000 missed messages from SQLite | 12 ms |
+| Event loop during a login storm (PBKDF2 600k on the worker pool) | ping p50 59 µs while both CPU threads hash |
+| Peer-to-peer AES-GCM UDP round trip | p50 63 µs |
+
+Run the benchmarks yourself on Linux:
+
+```bash
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUZZ_BUILD_TESTS=OFF
+cmake --build build
+scripts/bench.sh build/src bench-results.md
+```
+
+The `Benchmark` workflow runs the same script on every push to `main` and publishes the report in the job summary.
+
 ## Build
 
 Buzz builds on Linux (it uses `epoll`). You need CMake 3.16+, a C++17 compiler, OpenSSL 3 and SQLite 3. On other systems, use Docker.
@@ -123,7 +149,9 @@ include/buzz/   public headers of the core library
 src/core/       protocol, crypto, TLS, sessions, rooms, storage, reliable UDP
 src/server/     epoll event loop and protocol handlers
 src/client/     interactive client, server link and peer manager
+src/bench/      buzz-bench load generator
 tests/          GoogleTest unit and end-to-end suites
+scripts/        end-to-end and benchmark scripts
 ```
 
 ## Limits
