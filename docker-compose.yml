@@ -4,12 +4,13 @@ services:
   server:
     build: .
     image: buzz
-    command: ["--port", "7000", "--gen-cert", "--cert-host", "server"]
+    command: ["--port", "7000", "--gen-cert", "--cert-host", "server", "--db", "data/buzz.db"]
     ports:
       - "7000:7000/tcp"
       - "7000:7000/udp"
     volumes:
       - certs:/var/lib/buzz/certs
+      - data:/var/lib/buzz/data
 
   client:
     image: buzz
@@ -24,3 +25,4 @@ services:
 
 volumes:
   certs:
+  data:

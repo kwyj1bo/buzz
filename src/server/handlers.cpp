@@ -183,11 +183,21 @@ void Server::on_join(Connection& c, const Message& m) {
     broadcast(room, {MsgType::RoomEvent, {room, "join", c.user}}, c.user);
   }
   send(c, ok(MsgType::Join, room));
-  // A rejoin with `since` replays exactly what the client missed.
-  auto history = since ? rooms_.history_since(room, *since, config_.history_limit)
-                       : rooms_.history_since(room, 0, kJoinHistory);
-  for (const auto& stored : history) send(c, room_message(room, stored));
+  for (const auto& stored : history_for(room, since)) send(c, room_message(room, stored));
   send(c, {MsgType::SyncDone, {room, std::to_string(rooms_.last_seq(room))}});
+}
+
+// A rejoin with `since` replays what the client missed, up to max_replay.
+// Memory holds the newest history_limit messages; larger gaps come from SQLite.
+std::vector<StoredMessage> Server::history_for(const std::string& room,
+                                               std::optional<uint64_t> since) {
+  if (!since) return rooms_.history_since(room, 0, kJoinHistory);
+  uint64_t oldest = rooms_.oldest_seq(room);
+  bool memory_covers = oldest != 0 && oldest <= *since + 1;
+  if (storage_ && !memory_covers && *since < rooms_.last_seq(room)) {
+    return storage_->history_since(room, *since, config_.max_replay);
+  }
+  return rooms_.history_since(room, *since, config_.max_replay);
 }
 
 void Server::on_leave(Connection& c, const Message& m) {
@@ -203,6 +213,7 @@ void Server::on_say(Connection& c, const Message& m) {
   if (!valid_text(text)) return send(c, error(m.type, "text must be 1-4096 printable bytes"));
   if (!rooms_.is_member(room, c.user)) return send(c, error(m.type, "not in room " + room));
   const StoredMessage& stored = rooms_.post(room, c.user, text, now_ms());
+  if (storage_) storage_->append_message(room, stored);
   broadcast(room, room_message(room, stored));
 }
 

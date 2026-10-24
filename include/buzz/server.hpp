@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -13,6 +14,7 @@
 #include "buzz/protocol.hpp"
 #include "buzz/room_manager.hpp"
 #include "buzz/session_manager.hpp"
+#include "buzz/storage.hpp"
 #include "buzz/thread_pool.hpp"
 #include "buzz/tls.hpp"
 #include "buzz/user_store.hpp"
@@ -24,10 +26,12 @@ struct ServerConfig {
   uint16_t udp_port = 7000;
   std::string cert_file = "certs/server.crt";
   std::string key_file = "certs/server.key";
+  std::string db_path;  // SQLite file. Empty keeps everything in memory.
   size_t worker_threads = 4;
   uint32_t pbkdf2_iterations = crypto::kDefaultPbkdf2Iterations;
   std::chrono::seconds session_ttl{300};
-  size_t history_limit = 256;
+  size_t history_limit = 256;  // Messages per room kept in memory.
+  size_t max_replay = 1000;    // Messages replayed on a rejoin, read from disk if needed.
   size_t max_rooms = 1024;
   size_t max_connections = 10'000;
   size_t max_output_buffer = 1 << 20;
@@ -105,8 +109,12 @@ class Server {
   void read_udp();
   void on_udp_hello(const Message& m, const net::Endpoint& from);
   void expire_sessions();
+  void restore_rooms();
+  void flush_storage();
+  std::vector<StoredMessage> history_for(const std::string& room, std::optional<uint64_t> since);
 
   ServerConfig config_;
+  std::unique_ptr<Storage> storage_;
   tls::ContextPtr ctx_;
   UserStore users_;
   SessionManager sessions_;

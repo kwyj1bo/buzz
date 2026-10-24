@@ -56,6 +56,19 @@ std::vector<StoredMessage> RoomManager::history_since(const std::string& room, u
   return {first, r->history.end()};
 }
 
+void RoomManager::restore(const std::string& room, uint64_t last_seq,
+                          std::vector<StoredMessage> recent) {
+  Room& r = rooms_[room];
+  r.next_seq = last_seq + 1;
+  r.history.assign(std::make_move_iterator(recent.begin()), std::make_move_iterator(recent.end()));
+  while (r.history.size() > history_limit_) r.history.pop_front();
+}
+
+uint64_t RoomManager::oldest_seq(const std::string& room) const {
+  const Room* r = find(room);
+  return r && !r->history.empty() ? r->history.front().seq : 0;
+}
+
 bool RoomManager::is_member(const std::string& room, const std::string& user) const {
   const Room* r = find(room);
   return r && r->members.count(user) != 0;

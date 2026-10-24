@@ -19,6 +19,7 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 
 find_package(OpenSSL 3.0 REQUIRED)
+find_package(SQLite3 REQUIRED)
 find_package(Threads REQUIRED)
 
 add_compile_options(-Wall -Wextra -Wpedantic -Wshadow)

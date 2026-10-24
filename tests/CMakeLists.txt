@@ -16,7 +16,9 @@ add_executable(buzz_tests
   reliable_channel_test.cpp
   room_manager_test.cpp
   server_test.cpp
+  persistence_test.cpp
   session_manager_test.cpp
+  storage_test.cpp
   thread_pool_test.cpp
   user_store_test.cpp
   validate_test.cpp

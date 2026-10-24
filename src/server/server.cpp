@@ -48,7 +48,8 @@ bool would_block(int ssl_error) {
 
 Server::Server(ServerConfig config)
     : config_(std::move(config)),
-      users_(config_.pbkdf2_iterations),
+      storage_(config_.db_path.empty() ? nullptr : std::make_unique<Storage>(config_.db_path)),
+      users_(config_.pbkdf2_iterations, storage_.get()),
       sessions_(config_.session_ttl),
       rooms_(config_.history_limit, config_.max_rooms),
       wake_fd_(::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC)),
@@ -74,6 +75,7 @@ void Server::start() {
   watch(udp_fd_.get(), EPOLLIN, kUdpId);
   watch(wake_fd_.get(), EPOLLIN, kWakeId);
   watch(timer_fd_.get(), EPOLLIN, kTimerId);
+  restore_rooms();
   BUZZ_LOG(Info, "listening on tcp " << port_ << " (TLS) and udp " << udp_port_ << " with "
                                      << pool_.size() << " auth workers");
 }
@@ -88,8 +90,10 @@ void Server::run() {
     }
     for (int i = 0; i < count; ++i) dispatch(events[i].data.u64, events[i].events);
     close_pending();
+    flush_storage();
   }
   shutdown_all();
+  flush_storage();
   BUZZ_LOG(Info, "server stopped");
 }
 
@@ -293,6 +297,25 @@ void Server::drain_fd(int fd) {
   uint64_t value = 0;
   while (::read(fd, &value, sizeof value) > 0) {
   }
+}
+
+// Group commit: everything posted during one loop pass is written in a
+// single SQLite transaction.
+void Server::flush_storage() {
+  if (!storage_) return;
+  try {
+    storage_->flush();
+  } catch (const StorageError& e) {
+    BUZZ_LOG(Error, "storage flush failed: " << e.what());
+  }
+}
+
+void Server::restore_rooms() {
+  if (!storage_) return;
+  auto rooms = storage_->load_rooms(config_.history_limit);
+  for (auto& room : rooms) rooms_.restore(room.room, room.last_seq, std::move(room.recent));
+  BUZZ_LOG(Info, "loaded " << users_.size() << " users and " << rooms.size() << " rooms from "
+                           << config_.db_path);
 }
 
 Server::Connection* Server::find_connection(uint64_t id) {

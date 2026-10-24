@@ -7,8 +7,13 @@
 
 namespace buzz {
 
-UserStore::UserStore(uint32_t iterations)
-    : iterations_(iterations), dummy_(crypto::hash_password("buzz-dummy-password", iterations)) {}
+UserStore::UserStore(uint32_t iterations, Storage* storage)
+    : iterations_(iterations),
+      storage_(storage),
+      dummy_(crypto::hash_password("buzz-dummy-password", iterations)) {
+  if (!storage_) return;
+  for (auto& [name, hash] : storage_->load_users()) users_.emplace(name, std::move(hash));
+}
 
 UserStore::RegisterResult UserStore::add_user(const std::string& name,
                                               const std::string& password) {
@@ -20,8 +25,10 @@ UserStore::RegisterResult UserStore::add_user(const std::string& name,
   // Hash outside the lock: it is the slow part.
   crypto::PasswordHash hash = crypto::hash_password(password, iterations_);
   std::unique_lock lock(mutex_);
-  bool inserted = users_.emplace(name, std::move(hash)).second;
-  return inserted ? RegisterResult::Ok : RegisterResult::Exists;
+  if (users_.count(name) != 0) return RegisterResult::Exists;
+  if (storage_ && !storage_->insert_user(name, hash)) return RegisterResult::Exists;
+  users_.emplace(name, std::move(hash));
+  return RegisterResult::Ok;
 }
 
 bool UserStore::authenticate(const std::string& name, const std::string& password) const {

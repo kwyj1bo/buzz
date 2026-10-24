@@ -12,7 +12,8 @@ namespace buzz::test {
 // fresh self-signed certificate and cheap password hashing.
 class TestServer {
  public:
-  TestServer();
+  // db_path empty keeps everything in memory.
+  explicit TestServer(const std::string& db_path = "");
   ~TestServer();
 
   uint16_t port() const { return server_->port(); }
