@@ -57,6 +57,7 @@ run handshakes handshakes --clients 2000 --threads 8
 run connections connections --clients 10000 --threads 8
 run chat_max chat --rooms 50 --members 20 --senders 1 --window 8 --duration 10 --threads 4
 run chat_steady chat --rooms 50 --members 20 --senders 1 --rate 20 --duration 10 --threads 4
+run chat_heavy chat --rooms 50 --members 20 --senders 1 --rate 40 --duration 10 --threads 4
 run sync sync --messages 1000
 stop_server
 
@@ -100,6 +101,10 @@ row() { printf '| %s | %s %s |\n' "$1" "$(value "$2" "$3")" "$4"; }
   row "Steady load: end-to-end latency p50" chat_steady chat_latency_p50 "µs"
   row "Steady load: end-to-end latency p99" chat_steady chat_latency_p99 "µs"
   row "Steady load: server CPU" chat_steady server_cpu_percent "%"
+  row "Heavy load: deliveries out" chat_heavy chat_deliveries_per_sec "/s"
+  row "Heavy load: end-to-end latency p50" chat_heavy chat_latency_p50 "µs"
+  row "Heavy load: end-to-end latency p99" chat_heavy chat_latency_p99 "µs"
+  row "Heavy load: server CPU" chat_heavy server_cpu_percent "%"
   row "Replay of 1,000 missed messages on rejoin" sync replay_ms "ms"
   row "Logins per second, 1 worker (PBKDF2 600k)" logins_1_worker logins_per_sec "/s"
   row "Logins per second, ${CORES} workers (PBKDF2 600k)" logins_n_workers logins_per_sec "/s"

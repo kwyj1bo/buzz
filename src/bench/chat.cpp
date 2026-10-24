@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <memory>
+#include <random>
 
 #include "bench_client.hpp"
 #include "buzz/net.hpp"
@@ -56,9 +57,14 @@ class ChatWorker {
       event.data.u64 = i;
       ::epoll_ctl(epoll.get(), EPOLL_CTL_ADD, members_[i].client->fd(), &event);
     }
+    // Senders start at random offsets within one interval. Otherwise they
+    // fire in lockstep, and the bursts measure queueing in the generator.
+    std::mt19937_64 random(std::random_device{}());
+    const auto interval = o_.rate > 0 ? static_cast<int64_t>(1e9 / o_.rate) : 1;
+    std::uniform_int_distribution<int64_t> offset(0, interval - 1);
     for (auto& m : members_) {
       if (!m.sender) continue;
-      m.next_send_ns = now_ns();
+      m.next_send_ns = now_ns() + offset(random);
       if (o_.rate == 0) {
         for (int w = 0; w < o_.window; ++w) post(m);
       }
