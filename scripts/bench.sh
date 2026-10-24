@@ -44,7 +44,9 @@ run() {
   local label=$1
   shift
   echo "== $label: buzz-bench $*" >&2
-  "$BIN/buzz-bench" "$@" --port "$PORT" --ca "$WORK/server.crt" --server-pid "$SERVER_PID" |
+  local extra=()
+  [ -n "$SERVER_PID" ] && extra=(--port "$PORT" --ca "$WORK/server.crt" --server-pid "$SERVER_PID")
+  "$BIN/buzz-bench" "$@" "${extra[@]}" |
     awk -v label="$label" '$1 == "RESULT" { print label, $2, $3, $4 }' | tee -a "$RESULTS" >&2
 }
 
