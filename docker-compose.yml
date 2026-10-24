@@ -1,0 +1,26 @@
+# docker compose up -d server
+# docker compose run --rm client     (run it in two terminals to chat)
+services:
+  server:
+    build: .
+    image: buzz
+    command: ["--port", "7000", "--gen-cert", "--cert-host", "server"]
+    ports:
+      - "7000:7000/tcp"
+      - "7000:7000/udp"
+    volumes:
+      - certs:/var/lib/buzz/certs
+
+  client:
+    image: buzz
+    profiles: ["client"]
+    entrypoint: ["buzz"]
+    command: ["--host", "server", "--ca", "certs/server.crt"]
+    stdin_open: true
+    tty: true
+    depends_on: [server]
+    volumes:
+      - certs:/var/lib/buzz/certs:ro
+
+volumes:
+  certs:
