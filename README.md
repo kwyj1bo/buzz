@@ -123,7 +123,7 @@ docker compose up -d server
 docker compose run --rm client
 ```
 
-Run the second command in two terminals to chat. The image is also published to `ghcr.io/kwyj1bo/buzz` on every push to `main`.
+Run the second command in two terminals to chat. The image is also published to `ghcr.io/kwyj1bo/buzz-server` on every push to `main`.
 
 ## Server options
 
