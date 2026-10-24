@@ -44,6 +44,8 @@ bool to_sockaddr(const Endpoint& endpoint, sockaddr_storage& address, socklen_t&
 void set_nonblocking(int fd, bool enabled = true);
 void set_no_delay(int fd);
 void ignore_sigpipe();
+// Raises the open file limit to the hard limit, for many sockets.
+void raise_fd_limit();
 
 // All sockets are IPv4. Port 0 picks a free port.
 UniqueFd tcp_listen(uint16_t port, int backlog = 512);
