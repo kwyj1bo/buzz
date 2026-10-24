@@ -7,7 +7,8 @@
 
 namespace buzz::client {
 
-PeerManager::PeerManager(int udp_fd, Print print) : udp_fd_(udp_fd), print_(std::move(print)) {}
+PeerManager::PeerManager(int udp_fd, Print print, Undelivered undelivered)
+    : udp_fd_(udp_fd), print_(std::move(print)), undelivered_(std::move(undelivered)) {}
 
 void PeerManager::add_peer(const std::string& name, const net::Endpoint& endpoint,
                            std::string key) {
@@ -64,9 +65,7 @@ void PeerManager::tick(Clock::time_point now) {
     for (const auto& packet : peer.sender.due(now)) {
       send(peer, {MsgType::DmData, {self_, std::to_string(packet.seq), packet.payload}});
     }
-    for (const auto& lost : peer.sender.take_failed()) {
-      print_("! message to " + name + " was not delivered: " + lost.payload);
-    }
+    for (const auto& lost : peer.sender.take_failed()) undelivered_(name, lost.payload);
   }
 }
 

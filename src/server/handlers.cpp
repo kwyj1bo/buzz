@@ -44,6 +44,7 @@ void Server::handle(Connection& c, const Message& m) {
     default: break;
   }
   if (c.user.empty()) return send(c, error(m.type, "not logged in"));
+  if (!within_rate(c, m.type)) return send(c, error(m.type, "rate limit exceeded, slow down"));
   switch (m.type) {
     case MsgType::Logout: return on_logout(c);
     case MsgType::Join: return on_join(c, m);
@@ -52,6 +53,7 @@ void Server::handle(Connection& c, const Message& m) {
     case MsgType::Who: return on_who(c, m);
     case MsgType::ListRooms: return on_list_rooms(c);
     case MsgType::PeerRequest: return on_peer_request(c, m);
+    case MsgType::Relay: return on_relay(c, m);
     default: return send(c, error(m.type, "unexpected message"));
   }
 }
@@ -97,6 +99,11 @@ void Server::process_auth_results() {
     c->auth_pending = false;
     if (!r.ok) {
       send(*c, error(r.kind, r.error));
+      // Slows password guessing: each connection gets a few attempts.
+      if (r.kind == MsgType::Login && ++c->failed_logins >= config_.max_failed_logins) {
+        BUZZ_LOG(Warn, "#" << c->id << " closed after " << c->failed_logins << " failed logins");
+        mark_close(*c);
+      }
     } else if (r.kind == MsgType::Register) {
       BUZZ_LOG(Info, "registered " << r.user);
       send(*c, ok(MsgType::Register, r.user));
@@ -113,6 +120,7 @@ void Server::start_session(Connection& c, const std::string& user) {
   }
   Session& session = sessions_.create(user, c.id);
   c.user = user;
+  c.ever_logged_in = true;
   BUZZ_LOG(Info, user << " logged in from " << c.peer);
   send(c, {MsgType::Welcome, {user, session.token, std::to_string(udp_port_)}});
 }
@@ -127,6 +135,7 @@ void Server::on_resume(Connection& c, const Message& m) {
     take_over_session(*sessions_.find_user(user), c.id, "session resumed elsewhere");
     sessions_.attach(user, c.id);
     c.user = user;
+    c.ever_logged_in = true;
   }
   BUZZ_LOG(Info, user << " resumed from " << c.peer);
   send(c, {MsgType::Welcome, {user, token, std::to_string(udp_port_)}});
@@ -247,6 +256,28 @@ void Server::on_peer_request(Connection& c, const Message& m) {
   send(c, {MsgType::PeerInfo, {target, theirs.ip, std::to_string(theirs.port), key}});
   send(*peer_conn, {MsgType::PeerInfo, {c.user, mine.ip, std::to_string(mine.port), key}});
   BUZZ_LOG(Debug, "introduced " << c.user << " and " << target);
+}
+
+// Fallback for direct messages when the peers cannot reach each other over
+// UDP (for example behind symmetric NATs). Travels over TLS on both legs.
+void Server::on_relay(Connection& c, const Message& m) {
+  const std::string& target = m.field(0);
+  const std::string& text = m.field(1);
+  auto fail = [&](const std::string& reason) {
+    send(c, {MsgType::Error, {to_string(m.type), reason, target}});
+  };
+  if (!valid_text(text)) return fail("text must be 1-4096 printable bytes");
+  if (target == c.user) return fail("cannot message yourself");
+  Connection* peer = connection_of(target);
+  if (!peer) return fail(target + " is not online");
+  send(*peer, {MsgType::Relayed, {c.user, text}});
+  send(c, ok(MsgType::Relay, target));
+}
+
+// Room chat, relays and peer requests share one token bucket.
+bool Server::within_rate(Connection& c, MsgType type) {
+  bool limited = type == MsgType::Say || type == MsgType::Relay || type == MsgType::PeerRequest;
+  return !limited || c.limiter.take();
 }
 
 void Server::leave_all_rooms(const std::string& user) {

@@ -114,6 +114,7 @@ void Server::dispatch(uint64_t id, uint32_t events) {
       return process_auth_results();
     case kTimerId:
       drain_fd(timer_fd_.get());
+      close_stale_handshakes();
       return expire_sessions();
     default:
       if (Connection* c = find_connection(id); c && !c->closing) on_connection_event(*c, events);
@@ -137,7 +138,7 @@ void Server::accept_all() {
       continue;
     }
     net::set_no_delay(fd);
-    auto c = std::make_unique<Connection>();
+    auto c = std::make_unique<Connection>(config_.message_rate, config_.message_burst);
     c->id = next_conn_id_++;
     c->peer = net::endpoint_from(address).to_string();
     c->ssl.reset(SSL_new(ctx_.get()));
@@ -296,6 +297,20 @@ void Server::post_result(AuthResult result) {
 void Server::drain_fd(int fd) {
   uint64_t value = 0;
   while (::read(fd, &value, sizeof value) > 0) {
+  }
+}
+
+// Closes connections that do not finish the TLS handshake, or do not log
+// in, in time. Idle sockets then cannot pin server resources.
+void Server::close_stale_handshakes() {
+  auto now = std::chrono::steady_clock::now();
+  for (auto& [id, c] : connections_) {
+    if (c->closing || c->ever_logged_in || c->auth_pending) continue;
+    auto limit = c->handshake_done ? config_.login_timeout : config_.handshake_timeout;
+    if (now - c->accepted_at > limit) {
+      BUZZ_LOG(Debug, "#" << id << " timed out before login");
+      mark_close(*c);
+    }
   }
 }
 

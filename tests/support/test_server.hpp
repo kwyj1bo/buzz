@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <thread>
@@ -12,8 +13,11 @@ namespace buzz::test {
 // fresh self-signed certificate and cheap password hashing.
 class TestServer {
  public:
-  // db_path empty keeps everything in memory.
-  explicit TestServer(const std::string& db_path = "");
+  using Tweak = std::function<void(ServerConfig&)>;
+
+  // db_path empty keeps everything in memory. Rate limits are off unless a
+  // tweak sets them.
+  explicit TestServer(const std::string& db_path = "", const Tweak& tweak = {});
   ~TestServer();
 
   uint16_t port() const { return server_->port(); }

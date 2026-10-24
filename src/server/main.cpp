@@ -29,6 +29,8 @@ constexpr const char* kUsage = R"(usage: buzz-server [options]
   --cert-host NAME       extra DNS name or IP for the generated certificate
   --threads N            password hashing workers, default 4
   --pbkdf2-iterations N  default 600000
+  --message-rate N       chat messages per second per connection, default 30
+  --message-burst N      burst allowance for --message-rate, default 60
   --session-ttl SEC      how long a dropped session can resume, default 300
   --log-level LEVEL      debug, info, warn or error
 )";
@@ -70,6 +72,10 @@ Options parse(int argc, char** argv) {
       {"--threads", [&](auto& v) { c.worker_threads = number("--threads", v, 256); }},
       {"--pbkdf2-iterations",
        [&](auto& v) { c.pbkdf2_iterations = static_cast<uint32_t>(number("--pbkdf2-iterations", v, 10'000'000)); }},
+      {"--message-rate",
+       [&](auto& v) { c.message_rate = static_cast<double>(number("--message-rate", v, 1'000'000'000)); }},
+      {"--message-burst",
+       [&](auto& v) { c.message_burst = static_cast<double>(number("--message-burst", v, 1'000'000'000)); }},
       {"--session-ttl",
        [&](auto& v) { c.session_ttl = std::chrono::seconds(number("--session-ttl", v, 86'400)); }},
       {"--log-level",

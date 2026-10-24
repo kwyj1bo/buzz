@@ -15,13 +15,15 @@ namespace buzz::client {
 
 // Direct messages over UDP. Each peer has a key from the server, and every
 // datagram is encrypted and acknowledged, so chats keep working even while
-// the server is down.
+// the server is down. Messages that are never acknowledged go to the
+// `undelivered` callback, which relays them through the server.
 class PeerManager {
  public:
   using Clock = std::chrono::steady_clock;
   using Print = std::function<void(const std::string&)>;
+  using Undelivered = std::function<void(const std::string& peer, const std::string& text)>;
 
-  PeerManager(int udp_fd, Print print);
+  PeerManager(int udp_fd, Print print, Undelivered undelivered);
 
   void set_self(const std::string& user) { self_ = user; }
   void add_peer(const std::string& name, const net::Endpoint& endpoint, std::string key);
@@ -37,7 +39,8 @@ class PeerManager {
   struct Peer {
     net::Endpoint endpoint;
     std::string key;
-    ReliableSender sender;
+    // About 1.75 s of retries before falling back to the relay.
+    ReliableSender sender{std::chrono::milliseconds(250), 4};
     ReceiveWindow window;
   };
 
@@ -46,6 +49,7 @@ class PeerManager {
 
   int udp_fd_;
   Print print_;
+  Undelivered undelivered_;
   std::string self_;
   std::map<std::string, Peer> peers_;
 };

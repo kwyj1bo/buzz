@@ -52,7 +52,9 @@ Client::Client(const ClientConfig& config)
     : config_(config),
       link_(tls::make_client_context(config.ca_file), config.host, config.port),
       udp_(net::udp_bind(0)),
-      peers_(udp_.get(), [this](const std::string& line) { print(line); }) {
+      peers_(
+          udp_.get(), [this](const std::string& line) { print(line); },
+          [this](const std::string& peer, const std::string& text) { relay(peer, text); }) {
   int fds[2];
   if (::pipe2(fds, O_NONBLOCK | O_CLOEXEC) != 0) {
     throw std::system_error(errno, std::generic_category(), "pipe2");
@@ -173,6 +175,9 @@ void Client::on_message(const Message& m) {
     case MsgType::Ok: return on_ok(m);
     case MsgType::RoomMsg: return on_room_message(m);
     case MsgType::PeerInfo: return on_peer_info(m);
+    case MsgType::Relayed:
+      if (valid_text(m.field(1))) print("[dm via server] " + m.field(0) + ": " + m.field(1));
+      return;
     case MsgType::RoomEvent:
       return print("* " + m.field(2) + (m.field(1) == "join" ? " joined #" : " left #") +
                    m.field(0));
@@ -221,7 +226,7 @@ void Client::on_error(const Message& m) {
     current_room_.clear();
     resuming_ = false;
   }
-  if (context == "peer" && m.fields.size() > 2) waiting_dms_.erase(m.fields[2]);
+  if (context == "peer" && m.fields.size() > 2) return on_peer_error(m.fields[2], m.field(1));
   print("! " + context + ": " + m.field(1));
 }
 
@@ -269,6 +274,29 @@ void Client::on_peer_info(const Message& m) {
   if (waiting == waiting_dms_.end()) return;
   for (const auto& text : waiting->second) peers_.send_text(name, text, Clock::now());
   waiting_dms_.erase(waiting);
+}
+
+// The server could not introduce us. If the peer is online but has no
+// usable UDP path, the queued messages go through the server instead.
+void Client::on_peer_error(const std::string& peer, const std::string& reason) {
+  auto waiting = waiting_dms_.find(peer);
+  std::vector<std::string> texts;
+  if (waiting != waiting_dms_.end()) texts = std::move(waiting->second);
+  waiting_dms_.erase(peer);
+  if (reason.find("not online") != std::string::npos || texts.empty()) {
+    print("! dm: " + reason);
+    return;
+  }
+  for (const auto& text : texts) relay(peer, text);
+}
+
+void Client::relay(const std::string& peer, const std::string& text) {
+  if (!link_.connected() || token_.empty()) {
+    print("! message to " + peer + " was not delivered: " + text);
+    return;
+  }
+  print("* no direct path to " + peer + "; relaying through the server");
+  link_.send({MsgType::Relay, {peer, text}});
 }
 
 void Client::print(const std::string& line) { std::cout << line << std::endl; }

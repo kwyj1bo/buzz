@@ -27,6 +27,7 @@ enum class MsgType : uint8_t {
   Who = 9,
   PeerRequest = 10,
   Ping = 11,
+  Relay = 12,  // Direct message through the server when P2P fails.
 
   // Server to client.
   Ok = 64,
@@ -39,6 +40,7 @@ enum class MsgType : uint8_t {
   PeerInfo = 71,
   Pong = 72,
   SyncDone = 73,
+  Relayed = 74,
 
   // UDP: client to server registration, and peer to peer.
   UdpHello = 100,
