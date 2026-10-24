@@ -76,7 +76,7 @@ row() { printf '| %s | %s %s |\n' "$1" "$(value "$2" "$3")" "$4"; }
   echo "# Buzz benchmark results"
   echo
   echo "- Date: $(date -u +%Y-%m-%dT%H:%MZ)"
-  echo "- Machine: ${CORES} vCPU, $(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | xargs)"
+  echo "- Machine: ${CORES} vCPU ($(lscpu | awk -F: '/^Core\(s\) per socket/ { c = $2 } /^Thread\(s\) per core/ { t = $2 } END { gsub(/ /, "", c); gsub(/ /, "", t); print c " cores x " t " threads" }')), $(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | xargs)"
   echo "- Memory: $(free -g | awk '/Mem:/ { print $2 }') GiB, kernel $(uname -r)"
   echo "- Build: Release, $(${CXX:-c++} --version | head -1)"
   echo "- Server and load generator run on the same machine over loopback, with TLS 1.3."
@@ -103,6 +103,9 @@ row() { printf '| %s | %s %s |\n' "$1" "$(value "$2" "$3")" "$4"; }
   row "Replay of 1,000 missed messages on rejoin" sync replay_ms "ms"
   row "Logins per second, 1 worker (PBKDF2 600k)" logins_1_worker logins_per_sec "/s"
   row "Logins per second, ${CORES} workers (PBKDF2 600k)" logins_n_workers logins_per_sec "/s"
+  row "Ping p50 during the login storm" logins_n_workers ping_rtt_during_logins_p50 "µs"
+  row "Ping p99 during the login storm" logins_n_workers ping_rtt_during_logins_p99 "µs"
+  row "Server CPU cores busy during the login storm" logins_n_workers server_cpu_cores_busy ""
   row "P2P encrypted UDP round trip p50" p2p p2p_rtt_p50 "µs"
   row "P2P encrypted UDP round trips per second" p2p p2p_roundtrips_per_sec "/s"
   echo

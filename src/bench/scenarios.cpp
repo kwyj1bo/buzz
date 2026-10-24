@@ -5,7 +5,9 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 
+#include <atomic>
 #include <memory>
+#include <thread>
 
 #include "bench_client.hpp"
 #include "buzz/crypto.hpp"
@@ -88,10 +90,23 @@ void run_connections(const Options& o, SSL_CTX* ctx) {
   report_latency("ping_rtt_loaded", rtt);
 }
 
+// Login storm with real PBKDF2 cost. A probe pings the server meanwhile:
+// hashing runs on the worker pool, so the event loop should stay fast.
 void run_logins(const Options& o, SSL_CTX* ctx) {
   // One connection per thread keeps the server's worker pool busy.
   std::vector<std::unique_ptr<BenchClient>> clients;
   for (int t = 0; t < o.threads; ++t) clients.push_back(std::make_unique<BenchClient>(ctx, o.port));
+  BenchClient probe(ctx, o.port);
+  std::atomic<bool> storming{true};
+  Samples probe_rtt;
+  std::thread pinger([&] {
+    while (storming) {
+      ping_rtt(probe, 1, probe_rtt);
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+  });
+  double cpu_before = cpu_seconds(o.server_pid);
+  auto storm_start = Clock::now();
 
   auto start = Clock::now();
   parallel(o.threads, [&](int t) {
@@ -111,10 +126,18 @@ void run_logins(const Options& o, SSL_CTX* ctx) {
       samples[t].add(seconds_since(sent) * 1e6);
     }
   });
-  result("logins_per_sec", o.clients / seconds_since(start), "1/s");
+  double login_seconds = seconds_since(start);
+  storming = false;
+  pinger.join();
+  result("logins_per_sec", o.clients / login_seconds, "1/s");
   Samples all;
   for (auto& s : samples) all.merge(s);
   report_latency("login", all);
+  report_latency("ping_rtt_during_logins", probe_rtt);
+  if (o.server_pid > 0) {
+    result("server_cpu_cores_busy", (cpu_seconds(o.server_pid) - cpu_before) / seconds_since(storm_start),
+           "cores");
+  }
 }
 
 // Posts `messages` to a room, then times how long a new member takes to

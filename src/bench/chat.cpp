@@ -21,6 +21,7 @@ struct Member {
   bool sender = false;
   int64_t next_send_ns = 0;
   uint32_t interest = EPOLLIN;
+  bool dirty = false;  // Has output to flush.
 };
 
 struct ThreadResult {
@@ -69,10 +70,11 @@ class ChatWorker {
       if (now >= drain_ns) break;
       sending_ = now < stop_ns;
       if (sending_ && o_.rate > 0) pace(now);
-      for (size_t i = 0; i < members_.size(); ++i) update_interest(epoll.get(), i);
+      flush_dirty(epoll.get());
       int n = ::epoll_wait(epoll.get(), events.data(), static_cast<int>(events.size()), 1);
       for (int e = 0; e < n; ++e) {
         Member& m = members_[events[e].data.u64];
+        mark_dirty(events[e].data.u64);
         inbox.clear();
         if (!m.client->read_available(inbox)) throw std::runtime_error("server closed connection");
         for (const auto& message : inbox) on_message(m, message, now_ns());
@@ -84,7 +86,26 @@ class ChatWorker {
  private:
   void post(Member& m) {
     m.client->queue({MsgType::Say, {m.room, stamped_text(o_.payload)}});
+    mark_dirty(static_cast<size_t>(&m - members_.data()));
     ++result_.sent;
+  }
+
+  // Only clients with pending output are flushed, so the generator's own
+  // cost stays small next to the server's.
+  void mark_dirty(size_t index) {
+    if (members_[index].dirty) return;
+    members_[index].dirty = true;
+    dirty_.push_back(index);
+  }
+
+  void flush_dirty(int epoll_fd) {
+    std::vector<size_t> pending;
+    pending.swap(dirty_);
+    for (size_t index : pending) {
+      members_[index].dirty = false;
+      update_interest(epoll_fd, index);
+      if (members_[index].interest & EPOLLOUT) mark_dirty(index);
+    }
   }
 
   // Open loop: each sender posts at a fixed rate whatever the server does.
@@ -121,6 +142,7 @@ class ChatWorker {
   const Options& o_;
   std::vector<Member>& members_;
   ThreadResult result_;
+  std::vector<size_t> dirty_;
   bool sending_ = true;
 };
 
