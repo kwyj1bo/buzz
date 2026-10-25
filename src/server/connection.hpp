@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <deque>
 #include <string>
 
 #include "buzz/net.hpp"
@@ -18,7 +19,8 @@ struct Server::Connection {
   uint64_t id = 0;
   net::UniqueFd fd;
   tls::SslPtr ssl;
-  std::string peer;
+  std::string peer;  // ip:port, for logs.
+  std::string ip;
   bool handshake_done = false;
   bool handshake_wants_write = false;
   bool closing = false;
@@ -31,6 +33,12 @@ struct Server::Connection {
   FrameDecoder decoder;
   std::string out;
   std::string user;  // Empty until logged in.
+  // History owed to the client, sent as the output buffer drains.
+  struct Replay {
+    std::string room;
+    std::deque<StoredMessage> messages;
+  };
+  std::deque<Replay> replays;
 };
 
 }  // namespace buzz

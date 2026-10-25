@@ -31,6 +31,8 @@ class ReliableSender {
   bool ack(uint64_t seq);
   // Payloads dropped after max_attempts sends without an ack.
   std::vector<Packet> take_failed();
+  // Removes and returns every unacknowledged payload, oldest first.
+  std::vector<Packet> take_all();
   size_t in_flight() const { return pending_.size(); }
 
  private:
@@ -52,6 +54,8 @@ class ReceiveWindow {
  public:
   // True the first time seq is seen.
   bool accept(uint64_t seq);
+  // Marks every seq up to and including `seq` as seen.
+  void advance_to(uint64_t seq);
   uint64_t contiguous() const { return contiguous_; }
 
  private:

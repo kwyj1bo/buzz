@@ -75,5 +75,61 @@ TEST(RoomManager, HistoryIsBounded) {
   EXPECT_EQ(rooms.last_seq("general"), 10u);
 }
 
+// Bug 2: rooms are freed, so nobody can use up the room limit for good.
+TEST(RoomManager, EmptyRoomWithoutHistoryIsRemoved) {
+  RoomManager rooms(10, 10);
+  rooms.join("scratch", "alice");
+  rooms.leave("scratch", "alice");
+  EXPECT_FALSE(rooms.exists("scratch"));
+  rooms.join("a", "bob");
+  rooms.join("b", "bob");
+  rooms.leave_all("bob");
+  EXPECT_EQ(rooms.size(), 0u);
+}
+
+TEST(RoomManager, IdleRoomIsEvictedWhenFull) {
+  RoomManager rooms(10, 2);
+  rooms.join("old", "alice");
+  rooms.post("old", "alice", "hi", 1);
+  rooms.leave("old", "alice");  // Kept: it has history.
+  rooms.join("busy", "bob");
+  EXPECT_EQ(rooms.join("new", "carol"), RoomManager::JoinResult::Joined);
+  EXPECT_FALSE(rooms.exists("old"));
+  // Rooms with members are never evicted.
+  EXPECT_EQ(rooms.join("another", "dave"), RoomManager::JoinResult::TooManyRooms);
+}
+
+TEST(RoomManager, EvictedRoomKeepsNumbering) {
+  RoomManager rooms(10, 1);
+  rooms.join("old", "alice");
+  rooms.post("old", "alice", "one", 1);
+  rooms.post("old", "alice", "two", 2);
+  rooms.leave("old", "alice");
+  rooms.join("other", "bob");  // Evicts "old".
+  rooms.leave("other", "bob");
+  rooms.join("old", "alice");
+  EXPECT_EQ(rooms.post("old", "alice", "three", 3).seq, 3u);
+}
+
+TEST(RoomManager, PersistentRoomsAreReleasedWhenEmpty) {
+  RoomManager rooms(10, 10, /*persistent=*/true);
+  rooms.join("general", "alice");
+  rooms.post("general", "alice", "saved on disk", 1);
+  rooms.leave("general", "alice");
+  EXPECT_FALSE(rooms.exists("general"));
+  ASSERT_TRUE(rooms.restore("general", 1, {}));
+  EXPECT_EQ(rooms.last_seq("general"), 1u);
+}
+
+TEST(RoomManager, LimitsRoomsPerUser) {
+  RoomManager rooms(10, 100, false, /*max_rooms_per_user=*/2);
+  EXPECT_EQ(rooms.join("a", "alice"), RoomManager::JoinResult::Joined);
+  EXPECT_EQ(rooms.join("b", "alice"), RoomManager::JoinResult::Joined);
+  EXPECT_EQ(rooms.join("c", "alice"), RoomManager::JoinResult::UserRoomLimit);
+  rooms.leave("a", "alice");
+  EXPECT_EQ(rooms.join("c", "alice"), RoomManager::JoinResult::Joined);
+  EXPECT_EQ(rooms.join("c", "bob"), RoomManager::JoinResult::Joined);
+}
+
 }  // namespace
 }  // namespace buzz

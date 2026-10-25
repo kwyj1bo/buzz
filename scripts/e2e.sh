@@ -50,7 +50,7 @@ check() {
 
 check bob "alice: hello from alice"
 check bob "[dm] alice: psst, this one is direct"
-check alice "* direct channel to bob ready"
+check alice "* end-to-end encrypted channel to bob ready"
 echo "e2e: room message and direct message delivered"
 echo "--- bob's terminal ---"
 cat "$WORK/bob.log"

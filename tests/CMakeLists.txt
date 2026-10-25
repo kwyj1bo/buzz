@@ -9,12 +9,15 @@ set(BUILD_GMOCK OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
 add_executable(buzz_tests
+  auth_throttle_test.cpp
+  client_logic_test.cpp
   crypto_test.cpp
   hardening_test.cpp
   p2p_test.cpp
   peer_test.cpp
   protocol_test.cpp
   reliable_channel_test.cpp
+  replay_test.cpp
   room_manager_test.cpp
   server_test.cpp
   persistence_test.cpp
@@ -27,7 +30,7 @@ add_executable(buzz_tests
   support/test_server.cpp
 )
 target_include_directories(buzz_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(buzz_tests PRIVATE buzz_server_lib GTest::gtest_main)
+target_link_libraries(buzz_tests PRIVATE buzz_server_lib buzz_client_lib GTest::gtest_main)
 
 include(GoogleTest)
 gtest_discover_tests(buzz_tests DISCOVERY_TIMEOUT 60)

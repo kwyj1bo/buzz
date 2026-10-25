@@ -32,6 +32,8 @@ constexpr const char* kUsage = R"(usage: buzz-server [options]
   --message-rate N       chat messages per second per connection, default 30
   --message-burst N      burst allowance for --message-rate, default 60
   --max-connections N    default 10000
+  --auth-rate N          logins and registrations per minute per IP, default 20
+  --auth-burst N         burst allowance for --auth-rate, default 10
   --session-ttl SEC      how long a dropped session can resume, default 300
   --log-level LEVEL      debug, info, warn or error
 )";
@@ -77,6 +79,10 @@ Options parse(int argc, char** argv) {
        [&](auto& v) { c.message_rate = static_cast<double>(number("--message-rate", v, 1'000'000'000)); }},
       {"--message-burst",
        [&](auto& v) { c.message_burst = static_cast<double>(number("--message-burst", v, 1'000'000'000)); }},
+      {"--auth-rate",
+       [&](auto& v) { c.auth.per_minute = static_cast<double>(number("--auth-rate", v, 1'000'000'000)); }},
+      {"--auth-burst",
+       [&](auto& v) { c.auth.burst = static_cast<double>(number("--auth-burst", v, 1'000'000'000)); }},
       {"--max-connections",
        [&](auto& v) { c.max_connections = number("--max-connections", v, 1'000'000); }},
       {"--session-ttl",

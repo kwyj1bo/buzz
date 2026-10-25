@@ -29,6 +29,8 @@ class TestClient {
 
   // Registers, logs in and returns the session token.
   std::string sign_up(const std::string& user, const std::string& password = "password123");
+  // The last Welcome seen by sign_up.
+  const Message& welcome() const { return welcome_; }
 
  private:
   enum class ReadResult { Data, Timeout, Closed };
@@ -38,6 +40,7 @@ class TestClient {
   net::UniqueFd fd_;
   tls::SslPtr ssl_;
   FrameDecoder decoder_;
+  Message welcome_;
 };
 
 }  // namespace buzz::test

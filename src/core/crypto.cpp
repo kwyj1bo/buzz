@@ -3,8 +3,10 @@
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
+#include <openssl/kdf.h>
 #include <openssl/rand.h>
 
+#include <memory>
 #include <stdexcept>
 
 namespace buzz::crypto {
@@ -62,6 +64,59 @@ PasswordHash hash_password(std::string_view password, uint32_t iterations) {
 
 bool verify_password(std::string_view password, const PasswordHash& stored) {
   return constant_time_equal(pbkdf2(password, stored.salt, stored.iterations), stored.hash);
+}
+
+std::string sha256(std::string_view data) {
+  unsigned char out[EVP_MAX_MD_SIZE];
+  unsigned int length = 0;
+  check(EVP_Digest(data.data(), data.size(), out, &length, EVP_sha256(), nullptr), "SHA-256");
+  return std::string(reinterpret_cast<char*>(out), length);
+}
+
+std::string hkdf_sha256(std::string_view secret, std::string_view salt, std::string_view info,
+                        size_t length) {
+  std::unique_ptr<EVP_PKEY_CTX, decltype(&EVP_PKEY_CTX_free)> ctx(
+      EVP_PKEY_CTX_new_id(EVP_PKEY_HKDF, nullptr), EVP_PKEY_CTX_free);
+  std::string out(length, '\0');
+  size_t written = length;
+  if (!ctx || EVP_PKEY_derive_init(ctx.get()) <= 0 ||
+      EVP_PKEY_CTX_set_hkdf_md(ctx.get(), EVP_sha256()) <= 0 ||
+      EVP_PKEY_CTX_set1_hkdf_salt(ctx.get(), bytes(salt), as_int(salt.size())) <= 0 ||
+      EVP_PKEY_CTX_set1_hkdf_key(ctx.get(), bytes(secret), as_int(secret.size())) <= 0 ||
+      EVP_PKEY_CTX_add1_hkdf_info(ctx.get(), bytes(info), as_int(info.size())) <= 0 ||
+      EVP_PKEY_derive(ctx.get(), bytes(out), &written) <= 0 || written != length) {
+    throw std::runtime_error("HKDF failed");
+  }
+  return out;
+}
+
+X25519KeyPair::X25519KeyPair() : key_(EVP_PKEY_Q_keygen(nullptr, nullptr, "X25519")) {
+  if (!key_) throw std::runtime_error("X25519 key generation failed");
+  public_.resize(kPublicSize);
+  size_t length = kPublicSize;
+  check(EVP_PKEY_get_raw_public_key(key_, bytes(public_), &length), "X25519 public key");
+}
+
+X25519KeyPair::~X25519KeyPair() { EVP_PKEY_free(key_); }
+
+std::optional<std::string> X25519KeyPair::agree(std::string_view peer_public) const {
+  if (peer_public.size() != kPublicSize) return std::nullopt;
+  std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)> peer(
+      EVP_PKEY_new_raw_public_key(EVP_PKEY_X25519, nullptr, bytes(peer_public), kPublicSize),
+      EVP_PKEY_free);
+  std::unique_ptr<EVP_PKEY_CTX, decltype(&EVP_PKEY_CTX_free)> ctx(
+      EVP_PKEY_CTX_new(key_, nullptr), EVP_PKEY_CTX_free);
+  size_t length = 0;
+  // OpenSSL rejects low-order points, which would give an all-zero secret.
+  if (!peer || !ctx || EVP_PKEY_derive_init(ctx.get()) <= 0 ||
+      EVP_PKEY_derive_set_peer(ctx.get(), peer.get()) <= 0 ||
+      EVP_PKEY_derive(ctx.get(), nullptr, &length) <= 0) {
+    return std::nullopt;
+  }
+  std::string secret(length, '\0');
+  if (EVP_PKEY_derive(ctx.get(), bytes(secret), &length) <= 0) return std::nullopt;
+  secret.resize(length);
+  return secret;
 }
 
 std::string hmac_sha256(std::string_view key, std::string_view data) {

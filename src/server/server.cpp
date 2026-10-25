@@ -50,8 +50,10 @@ Server::Server(ServerConfig config)
     : config_(std::move(config)),
       storage_(config_.db_path.empty() ? nullptr : std::make_unique<Storage>(config_.db_path)),
       users_(config_.pbkdf2_iterations, storage_.get()),
-      sessions_(config_.session_ttl),
-      rooms_(config_.history_limit, config_.max_rooms),
+      sessions_(config_.session_ttl, storage_.get()),
+      rooms_(config_.history_limit, config_.max_rooms, storage_ != nullptr,
+             config_.max_rooms_per_user),
+      throttle_(config_.auth),
       wake_fd_(::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC)),
       next_conn_id_(kFirstConnectionId),
       pool_(config_.worker_threads) {
@@ -75,7 +77,10 @@ void Server::start() {
   watch(udp_fd_.get(), EPOLLIN, kUdpId);
   watch(wake_fd_.get(), EPOLLIN, kWakeId);
   watch(timer_fd_.get(), EPOLLIN, kTimerId);
-  restore_rooms();
+  if (storage_) {
+    BUZZ_LOG(Info, "loaded " << users_.size() << " users and " << sessions_.size()
+                             << " sessions from " << config_.db_path);
+  }
   BUZZ_LOG(Info, "listening on tcp " << port_ << " (TLS) and udp " << udp_port_ << " with "
                                      << pool_.size() << " auth workers");
 }
@@ -93,6 +98,7 @@ void Server::run() {
     flush_storage();
   }
   shutdown_all();
+  storage_retry_at_ = {};
   flush_storage();
   BUZZ_LOG(Info, "server stopped");
 }
@@ -114,8 +120,7 @@ void Server::dispatch(uint64_t id, uint32_t events) {
       return process_auth_results();
     case kTimerId:
       drain_fd(timer_fd_.get());
-      close_stale_handshakes();
-      return expire_sessions();
+      return on_timer();
     default:
       if (Connection* c = find_connection(id); c && !c->closing) on_connection_event(*c, events);
   }
@@ -141,6 +146,7 @@ void Server::accept_all() {
     auto c = std::make_unique<Connection>(config_.message_rate, config_.message_burst);
     c->id = next_conn_id_++;
     c->peer = net::endpoint_from(address).to_string();
+    c->ip = net::endpoint_from(address).ip;
     c->ssl.reset(SSL_new(ctx_.get()));
     if (!c->ssl || SSL_set_fd(c->ssl.get(), fd) != 1) {
       BUZZ_LOG(Error, "SSL_new failed: " << tls::last_error());
@@ -159,7 +165,9 @@ void Server::on_connection_event(Connection& c, uint32_t events) {
   if (events & EPOLLERR) return mark_close(c);
   if (!c.handshake_done && !handshake(c)) return update_interest(c);
   read_from(c);
-  if (!c.closing) flush(c);
+  if (c.closing) return;
+  flush(c);
+  pump_replays(c);
 }
 
 bool Server::handshake(Connection& c) {
@@ -300,6 +308,14 @@ void Server::drain_fd(int fd) {
   }
 }
 
+// Once a second: timeouts, session expiry and pruning of limiter state.
+void Server::on_timer() {
+  close_stale_handshakes();
+  expire_sessions();
+  throttle_.prune(Clock::now());
+  prune_peer_offers();
+}
+
 // Closes connections that do not finish the TLS handshake, or do not log
 // in, in time. Idle sockets then cannot pin server resources.
 void Server::close_stale_handshakes() {
@@ -315,22 +331,21 @@ void Server::close_stale_handshakes() {
 }
 
 // Group commit: everything posted during one loop pass is written in a
-// single SQLite transaction.
+// single SQLite transaction. After a failure (for example a full disk) the
+// server retries with backoff instead of on every loop pass, and logs once.
 void Server::flush_storage() {
-  if (!storage_) return;
+  if (!storage_ || Clock::now() < storage_retry_at_) return;
   try {
     storage_->flush();
+    if (storage_backoff_.count() > 0) BUZZ_LOG(Info, "storage writes recovered");
+    storage_backoff_ = std::chrono::seconds(0);
   } catch (const StorageError& e) {
-    BUZZ_LOG(Error, "storage flush failed: " << e.what());
+    bool first = storage_backoff_.count() == 0;
+    storage_backoff_ = first ? std::chrono::seconds(1)
+                             : std::min(storage_backoff_ * 2, std::chrono::seconds(60));
+    storage_retry_at_ = Clock::now() + storage_backoff_;
+    if (first) BUZZ_LOG(Error, "storage writes failing, retrying with backoff: " << e.what());
   }
-}
-
-void Server::restore_rooms() {
-  if (!storage_) return;
-  auto rooms = storage_->load_rooms(config_.history_limit);
-  for (auto& room : rooms) rooms_.restore(room.room, room.last_seq, std::move(room.recent));
-  BUZZ_LOG(Info, "loaded " << users_.size() << " users and " << rooms.size() << " rooms from "
-                           << config_.db_path);
 }
 
 Server::Connection* Server::find_connection(uint64_t id) {

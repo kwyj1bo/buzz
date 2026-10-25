@@ -74,5 +74,21 @@ TEST_F(PersistenceTest, OldGapsAreReadFromDisk) {
   EXPECT_EQ(first->field(1), "11");
 }
 
+// Bug 9: a server restart no longer logs everyone out.
+TEST_F(PersistenceTest, SessionsSurviveRestart) {
+  std::string token;
+  {
+    TestServer server(db());
+    TestClient alice(server.cert_file(), server.port());
+    token = alice.sign_up("alice");
+  }
+  TestServer server(db());
+  TestClient alice(server.cert_file(), server.port());
+  alice.send({MsgType::Resume, {token}});
+  auto welcome = alice.expect(MsgType::Welcome);
+  ASSERT_TRUE(welcome.has_value());
+  EXPECT_EQ(welcome->field(0), "alice");
+}
+
 }  // namespace
 }  // namespace buzz::test

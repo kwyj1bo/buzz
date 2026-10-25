@@ -3,6 +3,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -10,6 +11,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "buzz/auth_throttle.hpp"
 #include "buzz/net.hpp"
 #include "buzz/protocol.hpp"
 #include "buzz/room_manager.hpp"
@@ -33,13 +35,15 @@ struct ServerConfig {
   size_t history_limit = 256;  // Messages per room kept in memory.
   size_t max_replay = 1000;    // Messages replayed on a rejoin, read from disk if needed.
   size_t max_rooms = 1024;
+  size_t max_rooms_per_user = 64;
   size_t max_connections = 10'000;
   size_t max_output_buffer = 1 << 20;
   std::chrono::seconds handshake_timeout{10};  // To finish the TLS handshake.
   std::chrono::seconds login_timeout{300};     // To log in after connecting.
-  double message_rate = 30;    // Messages per second per connection...
+  double message_rate = 30;    // Requests per second per connection...
   double message_burst = 60;   // ...with bursts up to this many.
   int max_failed_logins = 5;   // Per connection, then it is closed.
+  AuthThrottle::Config auth;   // Per-IP and per-user limits on password work.
 };
 
 // TLS chat server. One thread runs a level-triggered epoll loop that owns all
@@ -63,6 +67,7 @@ class Server {
   uint16_t udp_port() const { return udp_port_; }
 
  private:
+  using Clock = std::chrono::steady_clock;
   struct Connection;
   struct AuthResult {
     uint64_t conn_id;
@@ -89,37 +94,49 @@ class Server {
   void watch(int fd, uint32_t events, uint64_t id);
   void post_result(AuthResult result);
   void drain_fd(int fd);
+  void flush_storage();
+  void on_timer();
   Connection* find_connection(uint64_t id);
   Connection* connection_of(const std::string& user);
 
-  // Protocol handlers (handlers.cpp).
+  // Accounts and sessions (handlers.cpp).
   void handle(Connection& c, const Message& m);
+  bool admit_auth(Connection& c, MsgType type);
   void on_register(Connection& c, const Message& m);
   void on_login(Connection& c, const Message& m);
   void on_resume(Connection& c, const Message& m);
   void on_logout(Connection& c);
+  void process_auth_results();
+  void on_auth_result(Connection& c, const AuthResult& r);
+  void start_session(Connection& c, const std::string& user);
+  void welcome(Connection& c, const std::string& token);
+  void take_over_session(const Session& old, uint64_t new_conn_id, const char* reason);
+  void end_session(Connection& c);
+  void detach_session(Connection& c);
+  bool within_rate(Connection& c, MsgType type);
+  void close_stale_handshakes();
+  void expire_sessions();
+
+  // Rooms and history sync (room_handlers.cpp).
   void on_join(Connection& c, const Message& m);
   void on_leave(Connection& c, const Message& m);
   void on_say(Connection& c, const Message& m);
   void on_who(Connection& c, const Message& m);
   void on_list_rooms(Connection& c);
-  void on_peer_request(Connection& c, const Message& m);
-  void on_relay(Connection& c, const Message& m);
-  bool within_rate(Connection& c, MsgType type);
-  void close_stale_handshakes();
-  void process_auth_results();
-  void start_session(Connection& c, const std::string& user);
-  void take_over_session(const Session& old, uint64_t new_conn_id, const char* reason);
-  void end_session(Connection& c);
-  void detach_session(Connection& c);
+  bool load_room(const std::string& room);
+  std::vector<StoredMessage> history_for(const std::string& room, std::optional<uint64_t> since);
+  void pump_replays(Connection& c);
   void leave_all_rooms(const std::string& user);
   void broadcast(const std::string& room, const Message& m, const std::string& skip_user = "");
+
+  // Peer introductions, relay and UDP (peer_handlers.cpp).
+  void on_peer_request(Connection& c, const Message& m);
+  void on_peer_accept(Connection& c, const Message& m);
+  void on_peer_decline(Connection& c, const Message& m);
+  void on_relay(Connection& c, const Message& m);
   void read_udp();
   void on_udp_hello(const Message& m, const net::Endpoint& from);
-  void expire_sessions();
-  void restore_rooms();
-  void flush_storage();
-  std::vector<StoredMessage> history_for(const std::string& room, std::optional<uint64_t> since);
+  void prune_peer_offers();
 
   ServerConfig config_;
   std::unique_ptr<Storage> storage_;
@@ -127,6 +144,9 @@ class Server {
   UserStore users_;
   SessionManager sessions_;
   RoomManager rooms_;
+  AuthThrottle throttle_;
+  // Open introductions: (requester, target) to when it was asked.
+  std::map<std::pair<std::string, std::string>, Clock::time_point> peer_offers_;
   net::UniqueFd epoll_fd_;
   net::UniqueFd listen_fd_;
   net::UniqueFd udp_fd_;
@@ -138,6 +158,8 @@ class Server {
   std::mutex results_mutex_;
   std::vector<AuthResult> results_;
   std::atomic<bool> stopping_{false};
+  Clock::time_point storage_retry_at_{};
+  std::chrono::seconds storage_backoff_{0};
   uint16_t port_ = 0;
   uint16_t udp_port_ = 0;
   // Declared last so it is destroyed first: its tasks use users_ and results_.

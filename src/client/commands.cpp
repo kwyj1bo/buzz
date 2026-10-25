@@ -2,6 +2,7 @@
 
 #include <sstream>
 
+#include "buzz/p2p.hpp"
 #include "buzz/validate.hpp"
 #include "client.hpp"
 
@@ -17,7 +18,8 @@ constexpr const char* kHelp = R"(commands:
   /room <room>                  switch the current room
   /rooms                        list rooms on the server
   /who [room]                   list members of a room
-  /dm <user> <text>             send a direct, peer-to-peer message
+  /dm <user> <text>             send an end-to-end encrypted direct message
+  /verify <user>                show the safety number of a direct channel
   /peers                        list direct channels
   /ping                         measure server round trip
   /quit                         exit (the session can resume for a while)
@@ -87,6 +89,7 @@ void Client::handle_line(const std::string& line) {
   if (cmd == "join") return cmd_join(args);
   if (cmd == "leave") return cmd_leave(args);
   if (cmd == "room") return cmd_room(args);
+  if (cmd == "verify") return cmd_verify(args);
   if (cmd == "dm") {
     if (args.size() < 3) return print("usage: /dm <user> <text>");
     return cmd_dm(args[1], rest_after(line.substr(1), 2));
@@ -111,7 +114,7 @@ void Client::handle_line(const std::string& line) {
     return;
   }
   if (cmd == "who") {
-    std::string room = args.size() > 1 ? args[1] : current_room_;
+    std::string room = args.size() > 1 ? args[1] : rooms_.current();
     if (room.empty()) return print("usage: /who <room>");
     if (require_login()) link_.send({MsgType::Who, {room}});
     return;
@@ -119,47 +122,62 @@ void Client::handle_line(const std::string& line) {
   print("! unknown command /" + cmd + " (try /help)");
 }
 
+// The room becomes current only when the server confirms the join.
 void Client::cmd_join(const std::vector<std::string>& args) {
   if (args.size() != 2) return print("usage: /join <room>");
   if (!require_login()) return;
   const std::string& room = args[1];
   if (!valid_room(room)) return print("! room names use letters, digits, '_' or '-'");
-  current_room_ = room;
+  rooms_.request_join(room);
   link_.send({MsgType::Join, {room}});
 }
 
 void Client::cmd_leave(const std::vector<std::string>& args) {
-  std::string room = args.size() > 1 ? args[1] : current_room_;
+  std::string room = args.size() > 1 ? args[1] : rooms_.current();
   if (room.empty()) return print("usage: /leave <room>");
   if (require_login()) link_.send({MsgType::Leave, {room}});
 }
 
 void Client::cmd_room(const std::vector<std::string>& args) {
   if (args.size() != 2) return print("usage: /room <room>");
-  if (rooms_.count(args[1]) == 0) return print("! not in #" + args[1] + "; /join it first");
-  current_room_ = args[1];
-  print("* talking in #" + current_room_);
+  if (!rooms_.set_current(args[1])) return print("! not in #" + args[1] + "; /join it first");
+  print("* talking in #" + args[1]);
 }
 
 void Client::cmd_dm(const std::string& peer, const std::string& text) {
   if (peer == user_) return print("! cannot message yourself");
   if (!valid_text(text)) return print("! message must be 1-4096 printable characters");
+  contacts_.insert(peer);
   if (peers_.has_peer(peer)) return peers_.send_text(peer, text, Clock::now());
   if (!require_login()) return;
-  auto& queue = waiting_dms_[peer];
-  queue.push_back(text);
-  // Ask the server to introduce us once; later messages wait in the queue.
-  if (queue.size() == 1) link_.send({MsgType::PeerRequest, {peer}});
+  // Introductions need our UDP endpoint; until it is registered the message
+  // waits and the request goes out on registration.
+  if (dms_.add(peer, text, udp_registered_, Clock::now())) request_peer(peer);
+}
+
+void Client::cmd_verify(const std::vector<std::string>& args) {
+  if (args.size() != 2) return print("usage: /verify <user>");
+  auto theirs = peers_.public_key(args[1]);
+  if (!theirs) return print("! no direct channel to " + args[1] + " yet; /dm them first");
+  print("safety number with " + args[1] + ": " +
+        p2p::safety_number(user_, keys_.public_key(), args[1], *theirs));
+  print("  compare it with " + args[1] + " in person or by phone; a mismatch means the keys "
+        "were swapped by someone in the middle");
 }
 
 void Client::say(const std::string& text) {
   if (!require_login()) return;
-  if (current_room_.empty()) return print("! join a room first: /join <room>");
+  if (rooms_.current().empty()) return print("! join a room first: /join <room>");
   if (!valid_text(text)) return print("! message must be 1-4096 printable characters");
-  link_.send({MsgType::Say, {current_room_, text}});
+  link_.send({MsgType::Say, {rooms_.current(), text}});
 }
 
+// Connects on demand when the client is idle without a session.
 bool Client::require_link() {
+  if (!link_.connected()) {
+    connect_policy_.want_now();
+    connect();
+  }
   if (link_.connected()) return true;
   print("! not connected to the server");
   return false;

@@ -36,11 +36,44 @@ TEST(P2P, GarbageIsRejected) {
 }
 
 TEST(P2P, HelloMacDependsOnEveryInput) {
-  std::string mac = hello_mac("token", "alice", "1000");
-  EXPECT_EQ(mac, hello_mac("token", "alice", "1000"));
-  EXPECT_NE(mac, hello_mac("token2", "alice", "1000"));
-  EXPECT_NE(mac, hello_mac("token", "bob", "1000"));
-  EXPECT_NE(mac, hello_mac("token", "alice", "1001"));
+  std::string mac = hello_mac("key", "alice", "nonce", "1");
+  EXPECT_EQ(mac, hello_mac("key", "alice", "nonce", "1"));
+  EXPECT_NE(mac, hello_mac("key2", "alice", "nonce", "1"));
+  EXPECT_NE(mac, hello_mac("key", "bob", "nonce", "1"));
+  EXPECT_NE(mac, hello_mac("key", "alice", "nonce2", "1"));
+  EXPECT_NE(mac, hello_mac("key", "alice", "nonce", "2"));
+}
+
+// Bug 4: both peers derive the same key from public values only.
+TEST(P2P, SessionKeyAgreement) {
+  crypto::X25519KeyPair alice;
+  crypto::X25519KeyPair bob;
+  crypto::X25519KeyPair mallory;
+  auto a = derive_session_key(alice, "alice", "bob", bob.public_key());
+  auto b = derive_session_key(bob, "bob", "alice", alice.public_key());
+  ASSERT_TRUE(a && b);
+  EXPECT_EQ(*a, *b);
+  EXPECT_EQ(a->size(), crypto::kKeySize);
+  // A key swapped in by someone in the middle gives a different key.
+  EXPECT_NE(*a, *derive_session_key(alice, "alice", "bob", mallory.public_key()));
+  // The key is bound to the names, too.
+  EXPECT_NE(*a, *derive_session_key(alice, "alice", "carol", bob.public_key()));
+}
+
+TEST(P2P, SessionKeyRejectsBadPublicKeys) {
+  crypto::X25519KeyPair alice;
+  EXPECT_FALSE(derive_session_key(alice, "alice", "bob", "short").has_value());
+  EXPECT_FALSE(derive_session_key(alice, "alice", "bob", std::string(32, '\0')).has_value());
+}
+
+TEST(P2P, SafetyNumberIsSymmetricAndDetectsSwaps) {
+  crypto::X25519KeyPair alice;
+  crypto::X25519KeyPair bob;
+  crypto::X25519KeyPair mallory;
+  std::string ab = safety_number("alice", alice.public_key(), "bob", bob.public_key());
+  EXPECT_EQ(ab, safety_number("bob", bob.public_key(), "alice", alice.public_key()));
+  EXPECT_NE(ab, safety_number("alice", alice.public_key(), "bob", mallory.public_key()));
+  EXPECT_EQ(ab.size(), 35u);  // Six groups of five.
 }
 
 }  // namespace

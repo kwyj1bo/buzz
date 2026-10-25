@@ -64,6 +64,7 @@ std::string TestClient::sign_up(const std::string& user, const std::string& pass
   send({MsgType::Login, {user, password}});
   auto welcome = expect(MsgType::Welcome);
   if (!welcome) throw std::runtime_error("login failed");
+  welcome_ = *welcome;
   return welcome->field(1);
 }
 
