@@ -24,7 +24,12 @@ CREATE TABLE IF NOT EXISTS messages (
   text   TEXT NOT NULL,
   PRIMARY KEY (room, seq)
 ) WITHOUT ROWID;
-PRAGMA user_version = 1;
+CREATE TABLE IF NOT EXISTS sessions (
+  user       TEXT PRIMARY KEY,
+  token_hash BLOB NOT NULL,
+  created_at INTEGER NOT NULL
+);
+PRAGMA user_version = 2;
 )";
 
 int64_t now_ms() {
@@ -92,7 +97,7 @@ class Storage::Statement {
   sqlite3_stmt* stmt_ = nullptr;
 };
 
-Storage::Storage(const std::string& path) {
+Storage::Storage(const std::string& path, size_t max_queued) : max_queued_(max_queued) {
   int flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX;
   if (sqlite3_open_v2(path.c_str(), &db_, flags, nullptr) != SQLITE_OK) {
     std::string error = db_ ? sqlite3_errmsg(db_) : "out of memory";
@@ -137,14 +142,60 @@ std::vector<std::pair<std::string, crypto::PasswordHash>> Storage::load_users() 
   return users;
 }
 
+void Storage::save_session(const std::string& user, const std::string& token_hash) {
+  std::lock_guard lock(mutex_);
+  Statement upsert(db_,
+                   "INSERT OR REPLACE INTO sessions (user, token_hash, created_at) "
+                   "VALUES (?, ?, ?)");
+  upsert.bind(1, user).bind_blob(2, token_hash).bind(3, now_ms());
+  if (upsert.run() != SQLITE_DONE) throw StorageError(sqlite3_errmsg(db_));
+}
+
+void Storage::delete_session(const std::string& user) {
+  std::lock_guard lock(mutex_);
+  Statement remove(db_, "DELETE FROM sessions WHERE user = ?");
+  remove.bind(1, user);
+  if (remove.run() != SQLITE_DONE) throw StorageError(sqlite3_errmsg(db_));
+}
+
+std::vector<std::pair<std::string, std::string>> Storage::load_sessions() {
+  std::lock_guard lock(mutex_);
+  Statement select(db_, "SELECT user, token_hash FROM sessions");
+  std::vector<std::pair<std::string, std::string>> sessions;
+  while (select.step()) sessions.emplace_back(select.text(0), select.text(1));
+  return sessions;
+}
+
 void Storage::append_message(const std::string& room, const StoredMessage& message) {
   std::lock_guard lock(mutex_);
+  if (queue_.size() >= max_queued_) {
+    queue_.pop_front();
+    ++dropped_;
+  }
   queue_.push_back({room, message});
+}
+
+size_t Storage::pending() {
+  std::lock_guard lock(mutex_);
+  return queue_.size();
+}
+
+uint64_t Storage::dropped() {
+  std::lock_guard lock(mutex_);
+  return dropped_;
 }
 
 size_t Storage::flush() {
   std::lock_guard lock(mutex_);
   return flush_locked();
+}
+
+// Reads should see queued messages, but a failing write must not fail them.
+void Storage::flush_for_read() {
+  try {
+    flush_locked();
+  } catch (const StorageError&) {
+  }
 }
 
 size_t Storage::flush_locked() {
@@ -169,34 +220,30 @@ size_t Storage::flush_locked() {
   return written;
 }
 
-std::vector<Storage::RoomHistory> Storage::load_rooms(size_t recent_limit) {
+std::optional<Storage::RoomHistory> Storage::load_room(const std::string& room,
+                                                      size_t recent_limit) {
   std::lock_guard lock(mutex_);
-  flush_locked();
-  std::vector<RoomHistory> rooms;
-  Statement select_rooms(db_, "SELECT room, MAX(seq) FROM messages GROUP BY room");
-  while (select_rooms.step()) {
-    rooms.push_back({select_rooms.text(0), static_cast<uint64_t>(select_rooms.integer(1)), {}});
+  flush_for_read();
+  Statement select(db_,
+                   "SELECT seq, ts, sender, text FROM messages WHERE room = ? "
+                   "ORDER BY seq DESC LIMIT ?");
+  select.bind(1, room).bind(2, static_cast<int64_t>(std::max<size_t>(recent_limit, 1)));
+  RoomHistory history{room, 0, {}};
+  while (select.step()) {
+    history.recent.push_back({static_cast<uint64_t>(select.integer(0)), select.integer(1),
+                              select.text(2), select.text(3)});
   }
-  Statement select_recent(db_,
-                          "SELECT seq, ts, sender, text FROM messages WHERE room = ? "
-                          "ORDER BY seq DESC LIMIT ?");
-  for (auto& room : rooms) {
-    select_recent.bind(1, room.room).bind(2, static_cast<int64_t>(recent_limit));
-    while (select_recent.step()) {
-      room.recent.push_back({static_cast<uint64_t>(select_recent.integer(0)),
-                             select_recent.integer(1), select_recent.text(2),
-                             select_recent.text(3)});
-    }
-    select_recent.reset();
-    std::reverse(room.recent.begin(), room.recent.end());
-  }
-  return rooms;
+  if (history.recent.empty()) return std::nullopt;
+  history.last_seq = history.recent.front().seq;
+  if (recent_limit == 0) history.recent.clear();
+  std::reverse(history.recent.begin(), history.recent.end());
+  return history;
 }
 
 std::vector<StoredMessage> Storage::history_since(const std::string& room, uint64_t since,
                                                   size_t limit) {
   std::lock_guard lock(mutex_);
-  flush_locked();
+  flush_for_read();
   // Newest `limit` messages after `since`, returned oldest first.
   Statement select(db_,
                    "SELECT seq, ts, sender, text FROM messages WHERE room = ? AND seq > ? "

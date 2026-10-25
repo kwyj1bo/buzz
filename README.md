@@ -7,12 +7,20 @@ Buzz is a hybrid messenger written in C++17. The server handles accounts, sessio
 ## Features
 
 - **Accounts and login.** Passwords are stored as salted PBKDF2-HMAC-SHA256 hashes (600,000 iterations). Hashing runs on a worker thread pool, so it never blocks the event loop.
-- **Session management.** Login returns a session token. If the connection drops, the client reconnects with backoff and resumes the session with the token. A second login of the same user takes over the session and closes the old connection.
+- **Session management.** Login returns a session token. If the connection drops, the client reconnects with backoff and resumes the session with the token. A second login of the same user takes over the session and closes the old connection. Sessions are stored in SQLite (only a SHA-256 of each token), so a server restart does not log users out.
 - **Chatrooms with data sync.** Each room numbers its messages. On reconnect the client rejoins each room with the last sequence number it saw, and the server replays only the missed messages.
-- **SQLite persistence.** Accounts and room history are stored in SQLite (WAL mode) and survive restarts. The server keeps the newest 256 messages per room in memory and reads older gaps from disk. Messages posted during one event loop pass are written in a single transaction (group commit).
-- **Peer-to-peer direct messages.** The server sends each peer the other's UDP endpoint and a fresh AES-256-GCM key. Messages then go directly between the peers, with acknowledgements, retransmission and duplicate filtering. Direct messages continue to work when the server is down.
-- **Relay fallback.** If a direct UDP path does not work (for example behind a symmetric NAT), the client retries for about 1.75 s and then sends the message through the server over TLS.
-- **Hardening.** Per-connection token-bucket rate limits, a TLS handshake timeout, a login timeout, a limit on failed logins per connection, a 64 KiB frame limit and a cap on per-connection output buffers. Room text with control characters is rejected, so clients cannot inject terminal escape sequences.
+- **SQLite persistence.** Accounts, sessions and room history are stored in SQLite (WAL mode) and survive restarts. Rooms load lazily on first use. The server keeps the newest 256 messages per room in memory and reads older gaps from disk. Messages posted during one event loop pass are written in a single transaction (group commit). If the disk fails, writes retry with backoff and the queue stays bounded.
+- **Paged history replay.** A rejoin can replay up to 1,000 missed messages. The server sends them as the socket drains, so a large backlog never overflows the output buffer.
+- **End-to-end encrypted peer-to-peer messages.** Peers agree on an AES-256-GCM key with X25519 and HKDF. The server forwards only public keys, so it cannot read direct messages. `/verify <user>` shows a safety number; if both users see the same one, nobody (including the server) swapped the keys. Messages go directly between the peers over UDP, with acknowledgements, retransmission and duplicate filtering, and keep working when the server is down.
+- **Address privacy.** A peer's IP address is shared only when that peer's client accepts the request. Clients accept only contacts (users they share a room with or have messaged); requests from strangers are declined and fall back to the relay.
+- **Relay fallback.** If a direct UDP path does not work (for example behind a symmetric NAT), the client retries for about 1.75 s and then sends the message through the server over TLS. A peer that stops answering is dropped, so the next message asks for a fresh introduction.
+- **Hardening.**
+  - A per-connection token bucket covers every request type.
+  - Register and Login draw from a per-IP budget (each costs a PBKDF2 hash).
+  - A username is locked after repeated failed logins; the lock doubles up to an hour and survives reconnects.
+  - Rooms with no members are freed or evicted, and each user can be in at most 64 rooms, so the room limit cannot be exhausted.
+  - TLS handshake and login timeouts, a 64 KiB frame limit and a cap on per-connection output buffers.
+  - Room text with control characters is rejected, so clients cannot inject terminal escape sequences.
 - **Scalable server.** One thread runs a level-triggered `epoll` loop over non-blocking TLS sockets, a UDP socket, an `eventfd` and a `timerfd`. Room broadcasts encode a frame once and share it with all members.
 - **TLS everywhere on TCP.** OpenSSL 3, TLS 1.2 or later. The client verifies the server certificate and host name.
 - **Tests.** GoogleTest unit and end-to-end suites run under AddressSanitizer and UndefinedBehaviorSanitizer in GitHub Actions, with GCC and Clang. The pipeline then builds and smoke-tests the Docker image.
@@ -38,9 +46,9 @@ flowchart LR
 ```
 
 1. A client logs in over TLS and gets a session token.
-2. The client sends a UDP hello to the server, signed with an HMAC of its token. The server records the public address it sees, which works through most NATs.
-3. `/dm bob hi` asks the server to introduce the two peers. Both receive the other's endpoint and a shared key over TLS.
-4. The peers exchange encrypted, acknowledged datagrams directly. If no acknowledgement arrives, the client relays the message through the server.
+2. The client sends a UDP hello to the server. The hello is signed with an HMAC keyed by a hash of the token, over a per-connection nonce and an increasing counter, so it cannot be forged or replayed. The server records the public address it sees, which works through most NATs.
+3. `/dm bob hi` sends Alice's X25519 public key to the server, which offers it to Bob. If Bob's client accepts, it answers with its own public key, and the server tells Alice Bob's endpoint. Each side derives the same AES-256-GCM key with HKDF; the server never sees it.
+4. The peers exchange encrypted, acknowledged datagrams directly. If Bob declines or no acknowledgement arrives, the client relays the message through the server.
 
 ### Wire protocol
 
@@ -50,7 +58,8 @@ Every message is `u8 type | u16 field_count | (u32 length | bytes) * field_count
 | --- | --- | --- |
 | `Register`, `Login`, `Resume`, `Logout` | `Ok`, `Error`, `Welcome` | `UdpHello`, `UdpAck` |
 | `Join(room, since?)`, `Leave`, `Say` | `RoomMsg`, `RoomEvent`, `SyncDone` | `DmData`, `DmAck`, `DmPunch` |
-| `ListRooms`, `Who`, `PeerRequest`, `Ping` | `Rooms`, `Members`, `PeerInfo`, `Pong` | |
+| `ListRooms`, `Who`, `Ping` | `Rooms`, `Members`, `Pong` | |
+| `PeerRequest(to, pubkey)`, `PeerAccept(from, pubkey)`, `PeerDecline(from)` | `PeerOffer(from, endpoint, pubkey)`, `PeerInfo(to, endpoint, pubkey)` | |
 | `Relay(to, text)` | `Relayed(from, text)` | |
 
 ## Performance
@@ -137,8 +146,10 @@ Run the second command in two terminals to chat. The image is also published to 
 | `--cert-host` | none | extra DNS name or IP in the generated certificate |
 | `--threads` | 4 | password hashing workers |
 | `--pbkdf2-iterations` | 600000 | password hashing cost |
-| `--message-rate` | 30 | chat messages per second per connection |
+| `--message-rate` | 30 | requests per second per connection |
 | `--message-burst` | 60 | burst allowance for `--message-rate` |
+| `--auth-rate` | 20 | logins and registrations per minute per IP |
+| `--auth-burst` | 10 | burst allowance for `--auth-rate` |
 | `--session-ttl` | 300 | seconds a dropped session can be resumed |
 | `--log-level` | info | `debug`, `info`, `warn` or `error` |
 
@@ -157,4 +168,5 @@ scripts/        end-to-end and benchmark scripts
 ## Limits
 
 - Relayed direct messages are protected by TLS on each leg, but the server can read them. Only the peer-to-peer path is end-to-end encrypted.
-- The UDP hello and its ack are not encrypted. The hello is authenticated with an HMAC and a timestamp, so it cannot be forged or replayed.
+- Keys are per client run, not long-term identities. A malicious server could swap public keys during an introduction; comparing safety numbers with `/verify` detects this.
+- The UDP hello and its ack are not encrypted. The hello is authenticated, so it cannot be forged or replayed.

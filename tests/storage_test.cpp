@@ -3,6 +3,8 @@
 
 #include <filesystem>
 
+#include <sqlite3.h>
+
 #include "buzz/storage.hpp"
 #include "buzz/user_store.hpp"
 
@@ -46,22 +48,47 @@ TEST_F(StorageTest, MessagesAreWrittenOnFlush) {
   EXPECT_EQ(storage.flush(), 0u);
 }
 
-TEST_F(StorageTest, LoadRoomsReturnsRecentHistory) {
+TEST_F(StorageTest, LoadRoomReturnsRecentHistory) {
   {
     Storage storage(path_);
     for (uint64_t seq = 1; seq <= 10; ++seq) storage.append_message("general", message(seq));
-    storage.append_message("random", message(1));
   }  // Destructor flushes.
   Storage storage(path_);
-  auto rooms = storage.load_rooms(3);
-  ASSERT_EQ(rooms.size(), 2u);
-  EXPECT_EQ(rooms[0].room, "general");
-  EXPECT_EQ(rooms[0].last_seq, 10u);
-  ASSERT_EQ(rooms[0].recent.size(), 3u);
-  EXPECT_EQ(rooms[0].recent.front().seq, 8u);
-  EXPECT_EQ(rooms[0].recent.back().text, "m10");
-  EXPECT_EQ(rooms[1].room, "random");
-  EXPECT_EQ(rooms[1].recent.size(), 1u);
+  auto room = storage.load_room("general", 3);
+  ASSERT_TRUE(room.has_value());
+  EXPECT_EQ(room->last_seq, 10u);
+  ASSERT_EQ(room->recent.size(), 3u);
+  EXPECT_EQ(room->recent.front().seq, 8u);
+  EXPECT_EQ(room->recent.back().text, "m10");
+  EXPECT_FALSE(storage.load_room("empty", 3).has_value());
+}
+
+TEST_F(StorageTest, SessionsRoundTrip) {
+  Storage storage(path_);
+  storage.save_session("alice", "hash-a");
+  storage.save_session("alice", "hash-b");  // Replaces.
+  storage.save_session("bob", "hash-c");
+  storage.delete_session("bob");
+  auto sessions = storage.load_sessions();
+  ASSERT_EQ(sessions.size(), 1u);
+  EXPECT_EQ(sessions[0].first, "alice");
+  EXPECT_EQ(sessions[0].second, "hash-b");
+}
+
+// Bug 8: when writes fail, messages stay queued, bounded, instead of
+// growing without limit.
+TEST_F(StorageTest, FailedFlushKeepsBoundedQueue) {
+  Storage storage(path_, /*max_queued=*/3);
+  {
+    sqlite3* other = nullptr;
+    ASSERT_EQ(sqlite3_open(path_.c_str(), &other), SQLITE_OK);
+    ASSERT_EQ(sqlite3_exec(other, "DROP TABLE messages", nullptr, nullptr, nullptr), SQLITE_OK);
+    sqlite3_close(other);
+  }
+  for (uint64_t seq = 1; seq <= 5; ++seq) storage.append_message("general", message(seq));
+  EXPECT_THROW(storage.flush(), StorageError);
+  EXPECT_EQ(storage.pending(), 3u);
+  EXPECT_EQ(storage.dropped(), 2u);
 }
 
 TEST_F(StorageTest, HistorySinceIncludesQueuedMessages) {

@@ -57,7 +57,7 @@ TEST(Relay, OfflineTargetFails) {
 TEST(RateLimit, RejectsFloodButKeepsConnection) {
   TestServer server("", [](ServerConfig& c) {
     c.message_rate = 0.001;
-    c.message_burst = 3;
+    c.message_burst = 4;  // One Join plus three messages.
   });
   TestClient alice(server.cert_file(), server.port());
   alice.sign_up("alice");
@@ -110,6 +110,66 @@ TEST(Timeouts, LoggedInClientStays) {
   std::this_thread::sleep_for(2500ms);
   alice.send({MsgType::Ping, {"1"}});
   EXPECT_TRUE(alice.expect(MsgType::Pong).has_value());
+}
+
+// Bug 3: failed logins count per username, so reconnecting does not reset
+// them, and the lock holds even for the right password.
+TEST(BruteForce, UsernameLockSurvivesReconnects) {
+  TestServer server("", [](ServerConfig& c) {
+    c.auth.lockout_failures = 2;
+    c.max_failed_logins = 100;
+  });
+  TestClient setup(server.cert_file(), server.port());
+  setup.sign_up("alice");
+  for (int i = 0; i < 2; ++i) {
+    TestClient attacker(server.cert_file(), server.port());
+    attacker.send({MsgType::Login, {"alice", "wrong-password"}});
+    ASSERT_TRUE(attacker.expect(MsgType::Error).has_value());
+  }
+  TestClient again(server.cert_file(), server.port());
+  again.send({MsgType::Login, {"alice", "password123"}});
+  auto reply = again.expect(MsgType::Error);
+  ASSERT_TRUE(reply.has_value());
+  EXPECT_NE(reply->field(1).find("too many failed logins"), std::string::npos);
+}
+
+// Bug 3: registration draws from a per-IP budget, across connections.
+TEST(BruteForce, RegistrationsAreLimitedPerAddress) {
+  TestServer server("", [](ServerConfig& c) {
+    c.auth.per_minute = 0.001;
+    c.auth.burst = 2;
+  });
+  int accepted = 0;
+  for (int i = 0; i < 4; ++i) {
+    TestClient client(server.cert_file(), server.port());
+    client.send({MsgType::Register, {"user" + std::to_string(i), "password123"}});
+    auto reply = client.receive();
+    ASSERT_TRUE(reply.has_value());
+    if (reply->type == MsgType::Ok) ++accepted;
+    else EXPECT_NE(reply->field(1).find("too many attempts"), std::string::npos);
+  }
+  EXPECT_EQ(accepted, 2);
+}
+
+// Bug 2: one user cannot hold every room slot.
+TEST(Rooms, PerUserRoomLimitProtectsRoomCreation) {
+  TestServer server("", [](ServerConfig& c) {
+    c.max_rooms = 3;
+    c.max_rooms_per_user = 2;
+  });
+  TestClient mallory(server.cert_file(), server.port());
+  mallory.sign_up("mallory");
+  for (const char* room : {"r1", "r2", "r3"}) mallory.send({MsgType::Join, {room}});
+  ASSERT_TRUE(mallory.expect(MsgType::SyncDone).has_value());
+  ASSERT_TRUE(mallory.expect(MsgType::SyncDone).has_value());
+  auto refused = mallory.expect(MsgType::Error);
+  ASSERT_TRUE(refused.has_value());
+  EXPECT_NE(refused->field(1).find("too many rooms"), std::string::npos);
+
+  TestClient alice(server.cert_file(), server.port());
+  alice.sign_up("alice");
+  alice.send({MsgType::Join, {"general"}});
+  EXPECT_TRUE(alice.expect(MsgType::SyncDone).has_value());
 }
 
 }  // namespace

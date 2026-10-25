@@ -59,6 +59,29 @@ TEST(Crypto, OpenRejectsWrongKeyOrAad) {
   EXPECT_FALSE(open(kKey, "short", "aad").has_value());
 }
 
+TEST(Crypto, Sha256MatchesKnownVector) {
+  EXPECT_EQ(to_hex(sha256("abc")),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+}
+
+TEST(Crypto, HkdfMatchesRfc5869) {
+  // RFC 5869, test case 1.
+  auto ikm = *from_hex("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b");
+  auto salt = *from_hex("000102030405060708090a0b0c");
+  auto info = *from_hex("f0f1f2f3f4f5f6f7f8f9");
+  EXPECT_EQ(to_hex(hkdf_sha256(ikm, salt, info, 42)),
+            "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf"
+            "34007208d5b887185865");
+}
+
+TEST(Crypto, X25519AgreesBothWays) {
+  X25519KeyPair a;
+  X25519KeyPair b;
+  EXPECT_EQ(a.public_key().size(), 32u);
+  EXPECT_EQ(a.agree(b.public_key()), b.agree(a.public_key()));
+  EXPECT_FALSE(a.agree("too short").has_value());
+}
+
 TEST(Crypto, WipeClears) {
   std::string secret = "password";
   wipe(secret);

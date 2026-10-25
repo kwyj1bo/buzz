@@ -45,6 +45,13 @@ std::vector<ReliableSender::Packet> ReliableSender::take_failed() {
   return out;
 }
 
+std::vector<ReliableSender::Packet> ReliableSender::take_all() {
+  std::vector<Packet> out;
+  for (auto& [seq, pending] : pending_) out.push_back({seq, std::move(pending.payload)});
+  pending_.clear();
+  return out;
+}
+
 bool ReceiveWindow::accept(uint64_t seq) {
   if (seq == 0 || seq <= contiguous_) return false;
   if (!ahead_.insert(seq).second) return false;
@@ -59,6 +66,16 @@ bool ReceiveWindow::accept(uint64_t seq) {
     ++contiguous_;
   }
   return true;
+}
+
+void ReceiveWindow::advance_to(uint64_t seq) {
+  if (seq <= contiguous_) return;
+  contiguous_ = seq;
+  while (!ahead_.empty() && *ahead_.begin() <= contiguous_) ahead_.erase(ahead_.begin());
+  while (!ahead_.empty() && *ahead_.begin() == contiguous_ + 1) {
+    ahead_.erase(ahead_.begin());
+    ++contiguous_;
+  }
 }
 
 }  // namespace buzz

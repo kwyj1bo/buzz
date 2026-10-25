@@ -23,7 +23,8 @@ start_server() {
   PORT=$((PORT + 1))
   "$BIN/buzz-server" --port "$PORT" --cert "$WORK/server.crt" --key "$WORK/server.key" \
     --gen-cert --db "$WORK/bench-$PORT.db" --message-rate 1000000000 \
-    --message-burst 1000000000 --max-connections 50000 --log-level warn "$@" &
+    --message-burst 1000000000 --auth-rate 1000000000 --auth-burst 1000000000 \
+    --max-connections 50000 --log-level warn "$@" &
   SERVER_PID=$!
   for _ in $(seq 1 100); do
     (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null && return 0

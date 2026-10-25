@@ -26,6 +26,8 @@ TestServer::TestServer(const std::string& db_path, const Tweak& tweak) {
   config.db_path = db_path;
   config.message_rate = 1e9;
   config.message_burst = 1e9;
+  config.auth.per_minute = 1e12;
+  config.auth.burst = 1e9;
   if (tweak) tweak(config);
   config.pbkdf2_iterations = 1000;
   config.worker_threads = 2;
